@@ -11,3 +11,5 @@ tenacity
 twilio
 validators
 WTForms
+alphaca_trade_api
+alpha_vantage
