@@ -1,0 +1,17 @@
+2023-07-17 21:00:43,197 - __main__ - INFO - Data retrieval and storage process completed.
+2023-07-17 21:14:10,825 - __main__ - INFO - Data retrieval and storage process completed.
+2023-07-19 09:15:22,987 - __main__ - INFO - Data retrieval and storage process completed.
+2023-07-19 13:12:05,713:INFO:Running alphavantagetickers.py
+2023-07-19 13:12:13,186:INFO:company_overviews.py was already run today. Skipping.
+2023-07-19 13:12:13,186:INFO:Running selected_pairs_history.py
+2023-07-19 13:12:54,379:INFO:Running bracket_order.py
+2023-07-19 13:13:20,460:INFO:Running alphavantagetickers.py
+2023-07-19 13:13:35,617:INFO:company_overviews.py was already run today. Skipping.
+2023-07-19 13:13:35,617:INFO:Running selected_pairs_history.py
+2023-07-19 13:14:18,057:INFO:Running bracket_order.py
+2023-07-19 13:14:19,679:ERROR:Error occurred while running bracket_order.py, exit code: 1
+2023-07-19 13:14:19,679:INFO:Retrying bracket_order.py after waiting 20 seconds...
+2023-07-19 13:18:44,584:INFO:Running alphavantagetickers.py
+2023-07-19 13:18:47,043:INFO:company_overviews.py was already run today. Skipping.
+2023-07-19 13:18:47,044:INFO:Running selected_pairs_history.py
+2023-07-19 13:19:23,259:INFO:Running bracket_order.py

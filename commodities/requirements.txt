@@ -1,0 +1,11 @@
+scikit-learn
+tensorflow
+numpy
+pandas
+alpaca_trade_api
+requests
+streamlit
+alphavantage
+azure-storage-blob
+openai
+scipy
