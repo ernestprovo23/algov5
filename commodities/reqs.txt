@@ -1,0 +1,13 @@
+aiohttp
+aiohttp-retry
+bcrypt
+email-validator
+openai
+pydeck
+python-http-client
+sendgrid
+streamlit-authenticator
+tenacity
+twilio
+validators
+WTForms
