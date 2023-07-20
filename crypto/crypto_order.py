@@ -4,6 +4,10 @@ from credentials import ALPACA_API_KEY, ALPACA_SECRET_KEY
 from risk_strategy import RiskManagement, risk_params, send_teams_message
 from trade_stats import record_trade
 import os
+import logging
+
+# Set up logging
+logging.basicConfig(filename='master_script.log', level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
 
 def get_files_in_current_directory():
     return [f for f in os.listdir() if os.path.isfile(f)]
@@ -34,7 +38,6 @@ data = data.sort_values('Date').drop_duplicates('Crypto', keep='last')
 # Create an empty list to store the symbol details
 symbol_details = []
 
-
 # Iterate over the rows of the DataFrame
 for _, row in data.iterrows():
     crypto = row["Crypto"]
@@ -44,14 +47,14 @@ for _, row in data.iterrows():
 
     # Skip the loop iteration if the symbol is 'nannan'
     if symbol == 'nannan':
-        print("Ignoring invalid symbol 'nannan'...")
+        logging.info("Ignoring invalid symbol 'nannan'...")
         continue
 
     signal = row["Signal"]
     momentum_signal = row["Momentum Signal"]
     quantity_to_sell = 0  # default quantity to sell
 
-    print(f"Processing symbol: {symbol}, Signal: {signal}, Momentum Signal: {momentum_signal}, Date Chose: {date}")
+    logging.info(f"Processing symbol: {symbol}, Signal: {signal}, Momentum Signal: {momentum_signal}, Date Chose: {date}")
 
     # Sell the entire position if momentum is negative
     risk_management.check_momentum(symbol, momentum_signal)
@@ -60,22 +63,22 @@ for _, row in data.iterrows():
         continue
 
     if signal == "Buy":
-        print(f"Buy signal detected for {symbol}")
+        logging.info(f"Buy signal detected for {symbol}")
 
         # Get the average entry price for the symbol
         avg_entry_price = risk_management.get_avg_entry_price(symbol)
 
         if avg_entry_price is not None:
-            print(f"Average entry price for {symbol}: {avg_entry_price}")
+            logging.info(f"Average entry price for {symbol}: {avg_entry_price}")
 
             # Calculate the quantity to buy based on average entry price and available equity
             quantity = risk_management.calculate_quantity(symbol)
 
-            print(f"Calculated quantity to buy: {quantity}")
+            logging.info(f"Calculated quantity to buy: {quantity}")
 
             # Validate the trade
             if risk_management.validate_trade(symbol, quantity, "buy"):
-                print(f"Buy order validated for {symbol}")
+                logging.info(f"Buy order validated for {symbol}")
 
                 if quantity > 0:
                     # Place a market buy order
@@ -86,9 +89,9 @@ for _, row in data.iterrows():
                         type='market',
                         time_in_force='gtc'
                     )
-                    print(f'Buy order placed for {quantity} units of {symbol}')
+                    logging.info(f'Buy order placed for {quantity} units of {symbol}')
                 else:
-                    print(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
+                    logging.info(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
 
                 # Send a message to the team
                 message = {
@@ -99,9 +102,9 @@ for _, row in data.iterrows():
                 # Record the trade
                 record_trade(crypto, 'buy', quantity, date)
             else:
-                print(f"Buy order not validated for {symbol}")
+                logging.info(f"Buy order not validated for {symbol}")
         else:
-            print(f"No average entry price found for {symbol}. Not placing a buy order.")
+            logging.info(f"No average entry price found for {symbol}. Not placing a buy order.")
     elif signal == "Sell":
         try:
             # Get current position
@@ -125,10 +128,10 @@ for _, row in data.iterrows():
                     # If the price is below the moving average, sell more than 50%
                     quantity_to_sell = max(1, int(float(quantity) * 0.7))
             else:
-                print(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
+                logging.info(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
                 quantity_to_sell = 0
         except Exception as e:
-            print(f"No position in {crypto} to sell")
+            logging.info(f"No position in {crypto} to sell")
             symbol_details.append(symbol)  # Add the symbol to the list
 
     # Validate the trade
@@ -141,7 +144,7 @@ for _, row in data.iterrows():
             type='market',
             time_in_force='gtc'
         )
-        print(f'Sell order placed for {quantity_to_sell} units of {crypto}')
+        logging.info(f'Sell order placed for {quantity_to_sell} units of {crypto}')
         # Send a message to the team
         message = {
             "text": f"Placed a SELL order for {quantity_to_sell} units of {crypto}"
