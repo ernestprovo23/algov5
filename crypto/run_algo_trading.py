@@ -25,6 +25,7 @@ def was_run_today(log_file):
     except FileNotFoundError:
         return False
 
+
 # Get the current script's directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
