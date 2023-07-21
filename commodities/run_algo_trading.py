@@ -12,20 +12,25 @@ def was_run_today(log_file):
         # Read the log file and check the last entry date
         with open(log_file, 'r') as f:
             lines = f.readlines()
-            last_run_line = lines[-1] # get the last line in the log file
-            last_run_date_str = re.search(r"\d{4}-\d{2}-\d{2}", last_run_line).group()
+            last_run_line = lines[-1]  # get the last line in the log file
+            date_search = re.search(r"\d{4}-\d{2}-\d{2}", last_run_line)
+
+            # Check if the date was found
+            if date_search is None:
+                return False
+
+            last_run_date_str = date_search.group()
             last_run_date = datetime.datetime.strptime(last_run_date_str, "%Y-%m-%d").date()
-            print(last_run_date)
-            print(datetime.date.today())
-        return last_run_date == datetime.date.today()
+            return last_run_date == datetime.date.today()
     except FileNotFoundError:
         return False
+
 
 # Get the current script's directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Construct the path to the log file
-log_file_path = os.path.join(current_dir, 'script.log')
+log_file_path = os.path.join(current_dir, 'comany_overviews.log')
 
 # Create a logger
 logging.basicConfig(filename=log_file_path, level=logging.INFO,

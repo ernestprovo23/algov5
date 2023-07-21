@@ -10,7 +10,7 @@ import credentials
 from s3connector import azure_connection_string
 
 # Set up logging
-logging.basicConfig(filename='script.log', level=logging.INFO)
+logging.basicConfig(filename='company_overviews.log', level=logging.INFO)
 
 api_key = credentials.ALPHA_VANTAGE_API
 max_requests_per_minute = 150
