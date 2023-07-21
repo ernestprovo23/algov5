@@ -18,6 +18,27 @@ scripts = [
 ]
 
 # Function to run the script and handle errors with retries
+import subprocess
+import sys
+import time
+import os
+import logging
+
+# Create a logger
+logging.basicConfig(filename='master_script.log', level=logging.INFO,
+                    format='%(asctime)s:%(levelname)s:%(message)s')
+
+# Get the current script's absolute directory path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# List your scripts in the desired order of execution
+scripts = [
+    "crypto.py",
+    "crypto_order.py"
+]
+
+# Function to run the script and handle errors with retries
+# In the function run_script_with_retries
 def run_script_with_retries(script, max_retries=2, wait_time=20):
     retries = 0
     while retries <= max_retries:
@@ -28,7 +49,7 @@ def run_script_with_retries(script, max_retries=2, wait_time=20):
 
         # Run the script and capture its exit code
         try:
-            subprocess.check_call(["python3", script_path])
+            result = subprocess.run(["python3", script_path], check=True)
             break  # If the script is successful, break the loop
         except subprocess.CalledProcessError as e:
             logging.error(f"Error occurred while running {script}, exit code: {e.returncode}")
@@ -39,6 +60,12 @@ def run_script_with_retries(script, max_retries=2, wait_time=20):
             else:
                 logging.error(f"Script {script} failed after {max_retries} retries. Skipping this script and moving to the next one.")
                 break
+
+
+# Iterate over the scripts list and execute them one by one
+for script in scripts:
+    run_script_with_retries(script)
+
 
 # Iterate over the scripts list and execute them one by one
 for script in scripts:
