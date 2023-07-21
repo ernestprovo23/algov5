@@ -30,7 +30,7 @@ def was_run_today(log_file):
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Construct the path to the log file
-log_file_path = os.path.join(current_dir, 'script.log')
+log_file_path = os.path.join(current_dir, 'comany_overviews.log')
 
 # Create a logger
 logging.basicConfig(filename=log_file_path, level=logging.INFO,
