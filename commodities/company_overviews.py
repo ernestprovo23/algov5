@@ -77,17 +77,20 @@ try:
 except AzureError as e:
     logging.error(f"Error retrieving tickers from Azure Blob Storage: {e}")
 
+# Retrieve company overviews
 company_overviews = []
 
 for symbol in tickers_list:
-    company_overviews.append(retrieve_company_overview(api_key, symbol))
-    # Wait 0.4 seconds after each request to respect the rate limit of 150 requests per minute
-    time.sleep(0.4)
+  overview = retrieve_company_overview(api_key, symbol)
+  company_overviews.append(overview)
 
-# Convert the list to a DataFrame
+# Filter out None
+company_overviews = [x for x in company_overviews if x is not None]
+
+# Construct DataFrame
 company_overviews_df = pd.DataFrame(company_overviews)
 
-# Save the DataFrame to CSV
-save_dataframe_to_csv(company_overviews_df, container_name, 'company_overviews.csv')
+# Save to CSV
+save_dataframe_to_csv(company_overviews_df, 'company_overviews.csv')
 
-send_teams_message(teams_url, "Script finished successfully.")
+send_teams_message(teams_url, "Company Overview Script finished successfully.")
