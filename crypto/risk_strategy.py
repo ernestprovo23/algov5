@@ -17,7 +17,7 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.4
+max_crypto_equity = equity * 0.2
 
 risk_params = {
     'max_position_size': 2500,
@@ -43,6 +43,32 @@ class RiskManagement:
 
     def get_equity(self):
         return float(self.api.get_account().equity)
+
+
+    def rebalance_positions(self):
+        """
+        Rebalance positions if any exceed 20% of equity - margin
+        """
+
+        account = self.api.get_account()
+        equity = float(account.equity)
+        margin = float(account.initial_margin)
+
+        rebalance_threshold = (equity - margin) * 0.20
+
+        positions = self.api.list_positions()
+
+        for position in positions:
+            position_value = float(position.qty) * float(position.current_price)
+
+            if position_value > rebalance_threshold:
+                shares_to_sell = int((position_value - rebalance_threshold) / float(position.current_price))
+                print(f"Total Shares to sell: {shares_to_sell}")
+
+                self.api.submit_order(symbol=position.symbol, qty=shares_to_sell, side='sell', type='market',
+                                      time_in_force='gtc')
+
+
 
     def validate_trade(self, symbol, qty, order_type):
         try:
@@ -276,6 +302,7 @@ class RiskManagement:
 
             return True
 
+
     def check_momentum(self, symbol, momentum_signal):
         """
         Checks the momentum signal and decides whether to sell the entire position.
@@ -361,6 +388,7 @@ class RiskManagement:
         print(f"Calculated quantity for {symbol}: {quantity}")
         return quantity
 
+
     def execute_profit_taking(self, symbol, pct_gain=0.05):
         """
         Executes a profit-taking strategy.
@@ -387,6 +415,7 @@ class RiskManagement:
                     time_in_force='gtc'
                 )
                 print(f"Selling {qty} shares of {symbol} to realize profit.")
+
 
     def execute_stop_loss(self, symbol, pct_loss=0.07):
         """
@@ -472,6 +501,7 @@ class RiskManagement:
         else:
             return "Hold"
 
+
     def get_exchange_rate(base_currency, quote_currency):
         # Your Alpha Vantage API key
         api_key = ALPHA_VANTAGE_API
@@ -489,6 +519,7 @@ class RiskManagement:
         exchange_rate = data["Realtime Currency Exchange Rate"]["5. Exchange Rate"]
 
         return float(exchange_rate)
+
 
     def get_purchase_price(self, symbol):
         """
@@ -586,7 +617,7 @@ if __name__ == "__main__":
     risk_manager.monitor_positions()
     risk_manager.report_profit_and_loss()
     risk_manager.update_risk_parameters()
-    #risk_manager.check_risk_before_order()
+    risk_manager.rebalance_positions()
 
     account = risk_manager.api.get_account()  # added this line to get account details
     portfolio = risk_manager.api.list_positions()
