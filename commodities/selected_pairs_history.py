@@ -114,7 +114,7 @@ df = df.dropna(subset=['Sector'])
 
 average_pe_by_sector = df.groupby('Sector')['PERatio'].mean()
 df = df[df.apply(lambda row: row['PERatio'] < average_pe_by_sector[row['Sector']], axis=1)]
-min_market_cap = 10_000_000
+min_market_cap = 1_000_000
 max_market_cap = 5_000_000_000_000
 df = df[(df["MarketCapitalization"] >= min_market_cap) & (df["MarketCapitalization"] <= max_market_cap)]
 
@@ -133,7 +133,7 @@ print(df.describe())
 
 
 # Apply additional filters and criteria
-df = df[df["ProfitMargin"] > -5.5]
+df = df[df["ProfitMargin"] > -1.5]
 print(f"Symbols left after ProfitMargin filter: {df.shape[0]}")
 
 df = df[df["PERatio"] >= 3.5]
@@ -145,7 +145,7 @@ print(f"Symbols left after ReturnOnEquityTTM filter: {df.shape[0]}")
 df = df[df["EVToEBITDA"] >= 1.5]
 print(f"Symbols left after EVToEBITDA filter: {df.shape[0]}")
 
-df = df[df["QuarterlyEarningsGrowthYOY"] > 0.078]
+df = df[df["QuarterlyEarningsGrowthYOY"] > -0.0078]
 print(f"Symbols left after QuarterlyEarningsGrowthYOY filter: {df.shape[0]}")
 
 
