@@ -56,21 +56,25 @@ def get_files_in_current_directory():
 
 
 def load_data():
-    # Load all CSV data
+    dfs = []
     for filename in get_files_in_current_directory():
-        if filename.endswith(".csv"):  # Check if the file is a CSV
+        try:
             data = pd.read_csv(filename)
-
-    # Convert the Date column to datetime
-    if 'Date' in data.columns:
-        data['Date'] = pd.to_datetime(data['Date'])
-        logging.warn("Date column not found in CSV")
-
-
-    # Sort by date and drop duplicate symbols, keeping only the latest record for each symbol
-    data = data.sort_values('Date').drop_duplicates('Crypto', keep='last')
-    return data
-
+            if 'Date' not in data.columns:
+                logging.warning(f"No 'Date' column in {filename}")
+                continue
+            data = data.sort_values('Date').drop_duplicates('Crypto')
+            dfs.append(data)
+        except Exception as e:
+            logging.error(f"Error loading {filename}: {e}")
+    if len(dfs) > 0:
+        try:
+            return pd.concat(dfs)
+        except Exception as e:
+            logging.error(f"Error concatenating DataFrames: {e}")
+            return None
+    else:
+        return None
 
 def get_symbol(row):
     crypto = row["Crypto"]
@@ -139,7 +143,7 @@ def process_buy(api, row, risk_management, teams_url, manager):
                 send_teams_message(teams_url, {"text": f"Placed a BUY order for {quantity} units of {symbol}"})
 
                 # Record the trade
-                record_trade(crypto, 'buy', quantity, date)
+                record_trade(symbol, 'buy', quantity, date)
             else:
                 logging.info(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
         else:
