@@ -1,13 +1,15 @@
-import time
+from datetime import timedelta
 import requests
 import pandas as pd
 import logging
-from datetime import datetime
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import AzureError
 from io import StringIO
 import credentials
 from s3connector import azure_connection_string
+import timeit
+
+start_time = timeit.default_timer()
 
 # Set up logging
 logging.basicConfig(filename='company_overviews.log', level=logging.INFO)
@@ -91,6 +93,17 @@ company_overviews = [x for x in company_overviews if x is not None]
 company_overviews_df = pd.DataFrame(company_overviews)
 
 # Save to CSV
-save_dataframe_to_csv(company_overviews_df, 'company_overviews.csv')
+container_name = 'historic'
 
-send_teams_message(teams_url, "Company Overview Script finished successfully.")
+save_dataframe_to_csv(company_overviews_df, container_name, 'company_overviews.csv')
+
+end_time = timeit.default_timer()
+elapsed = end_time - start_time
+
+elapsed = str(timedelta(seconds=elapsed))
+
+print(f"Elapsed time: {elapsed} seconds")
+
+message = f"Company Overview Script finished successfully. Elapsed time: {elapsed} seconds."
+
+send_teams_message(teams_url, message)
