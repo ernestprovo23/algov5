@@ -62,7 +62,10 @@ def load_data():
             data = pd.read_csv(filename)
 
     # Convert the Date column to datetime
-    data['Date'] = pd.to_datetime(data['Date'])
+    if 'Date' in data.columns:
+        data['Date'] = pd.to_datetime(data['Date'])
+        logging.warn("Date column not found in CSV")
+
 
     # Sort by date and drop duplicate symbols, keeping only the latest record for each symbol
     data = data.sort_values('Date').drop_duplicates('Crypto', keep='last')
