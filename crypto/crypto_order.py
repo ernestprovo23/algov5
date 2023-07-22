@@ -24,6 +24,10 @@ class PortfolioManager:
     def __init__(self, api):
         self.api = api
         self.assets = {}
+        self.operations = 0  # track the number of operations
+
+    def increment_operations(self):
+        self.operations += 1
 
     def add_asset(self, symbol, quantity, value_usd):
         self.assets[symbol] = CryptoAsset(symbol, quantity, value_usd)
@@ -129,8 +133,8 @@ def process_buy(api, row, risk_management, teams_url, manager):
                         type='market',
                         time_in_force='gtc'
                     )
-                    manager.add_asset(symbol, quantity, avg_entry_price*quantity) # Adding new asset to portfolio
-
+                    manager.add_asset(symbol, quantity, avg_entry_price * quantity)  # Adding new asset to portfolio
+                    manager.increment_operations()  # increment the number of operations
                 except Exception as e:
                     logging.error(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
                     return
@@ -198,8 +202,9 @@ def process_sell(api, row, risk_management, teams_url, manager):
                     type='market',
                     time_in_force='gtc'
                 )
-                manager.update_asset_value(symbol, (quantity - quantity_to_sell) * current_price)  # Update asset value after selling
-
+                manager.update_asset_value(symbol, (
+                            quantity - quantity_to_sell) * current_price)  # Update asset value after selling
+                manager.increment_operations()  # increment the number of operations
             except Exception as e:
                 logging.error(f'Error placing sell order for {quantity_to_sell} units of {symbol}: {str(e)}')
                 return
@@ -243,6 +248,13 @@ def process_signals():
     for index, row in data.iterrows():
         process_buy(api, row, risk_management, teams_url, manager)
         process_sell(api, row, risk_management, teams_url, manager)
+
+    if manager.operations == 0:
+        # Send a message to the team
+        message = {
+            "text": "No 'Buy' or 'Sell' operations were made."
+        }
+        send_teams_message(teams_url, message)
 
 
 if __name__ == "__main__":
