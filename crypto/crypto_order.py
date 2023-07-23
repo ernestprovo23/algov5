@@ -1,13 +1,10 @@
 import os
-import time
 import logging
 import pandas as pd
 import alpaca_trade_api as tradeapi
-
 from credentials import ALPACA_API_KEY, ALPACA_SECRET_KEY
 from risk_strategy import RiskManagement, risk_params, send_teams_message
 from trade_stats import record_trade
-
 
 # Set up logging
 logging.basicConfig(filename='master_script.log', level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
@@ -59,27 +56,6 @@ def get_files_in_current_directory():
     return [f for f in os.listdir() if os.path.isfile(f)]
 
 
-def load_data():
-    dfs = []
-    for filename in get_files_in_current_directory():
-        try:
-            data = pd.read_csv(filename)
-            if 'Date' not in data.columns:
-                logging.warning(f"No 'Date' column in {filename}")
-                continue
-            data = data.sort_values('Date').drop_duplicates('Crypto')
-            dfs.append(data)
-        except Exception as e:
-            logging.error(f"Error loading {filename}: {e}")
-    if len(dfs) > 0:
-        try:
-            return pd.concat(dfs)
-        except Exception as e:
-            logging.error(f"Error concatenating DataFrames: {e}")
-            return None
-    else:
-        return None
-
 def get_symbol(row):
     crypto = row["Crypto"]
     quote = row["Quote"]
@@ -87,10 +63,13 @@ def get_symbol(row):
     return symbol if symbol != 'nannan' else None
 
 
-def process_buy(api, row, risk_management, teams_url, manager):
+def process_buy(api, data, row, risk_management, teams_url, manager):
     symbol = get_symbol(row)
     if symbol is None:
         return
+
+    # Get the last row for the symbol
+    row = data[data['Symbol'] == symbol].iloc[-1]
 
     signal = row["Signal"]
     date = row["Date"]
@@ -122,6 +101,7 @@ def process_buy(api, row, risk_management, teams_url, manager):
         # Validate the trade
         if risk_management.validate_trade(symbol, quantity, "buy"):
             logging.info(f"Buy order validated for {symbol}")
+            print(f"Buy order validated for {symbol}")
 
             if quantity > 0:
                 try:
@@ -137,13 +117,11 @@ def process_buy(api, row, risk_management, teams_url, manager):
                     manager.increment_operations()  # increment the number of operations
                 except Exception as e:
                     logging.error(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
+                    print(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
                     return
 
                 logging.info(f'Buy order placed for {quantity} units of {symbol}')
                 # Send a message to the team
-                message = {
-                    "text": f"Placed a BUY order for {quantity} units of {symbol}"
-                }
                 send_teams_message(teams_url, {"text": f"Placed a BUY order for {quantity} units of {symbol}"})
 
                 # Record the trade
@@ -156,10 +134,13 @@ def process_buy(api, row, risk_management, teams_url, manager):
         logging.info(f"No average entry price found for {symbol}. Not placing a buy order.")
 
 
-def process_sell(api, row, risk_management, teams_url, manager):
+def process_sell(api, data, row, risk_management, teams_url, manager):
     symbol = get_symbol(row)
     if symbol is None:
         return
+
+    # Get the last row for the symbol
+    row = data[data['Symbol'] == symbol].iloc[-1]
 
     signal = row["Signal"]
     date = row["Date"]
@@ -218,7 +199,7 @@ def process_sell(api, row, risk_management, teams_url, manager):
             send_teams_message(teams_url, {"text": f"Placed a SELL order for {quantity_to_sell} units of {symbol}"})
 
             # Record the trade
-            record_trade(crypto, 'sell', quantity_to_sell, date)
+            record_trade(symbol, 'sell', quantity_to_sell, date)
 
         else:
             logging.info(f"Sell order not validated for {symbol}")
@@ -239,15 +220,28 @@ def process_signals():
     # Initialize RiskManagement
     risk_management = RiskManagement(api, risk_params)
 
-    data = load_data()
+    # get the current directory
+    current_directory = os.getcwd()
+
+    # create a relative path to the csv file
+    file_path = os.path.join(current_directory, 'crypto_results.csv')
+
+    # load the csv file into a pandas DataFrame
+    data = pd.read_csv(file_path)
+
+    data['Symbol'] = data.apply(get_symbol, axis=1)
+    data['Date'] = pd.to_datetime(data['Date'])
+    data.sort_values(by='Date', ascending=True, inplace=True)
+
+    grouped = data.sort_values('Date').groupby('Symbol').tail(1)
 
     # Create an empty list to store the symbol details
     symbol_details = []
 
     # Iterate over the rows of the DataFrame and process the signals
-    for index, row in data.iterrows():
-        process_buy(api, row, risk_management, teams_url, manager)
-        process_sell(api, row, risk_management, teams_url, manager)
+    for index, row in grouped.iterrows():
+        process_buy(api, data, row, risk_management, teams_url, manager)
+        process_sell(api, data, row, risk_management, teams_url, manager)
 
     if manager.operations == 0:
         # Send a message to the team
