@@ -20,11 +20,11 @@ equity = float(account.equity)
 max_crypto_equity = equity * 0.2
 
 risk_params = {
-    'max_position_size': 2500,
+    'max_position_size': 1250,
     'max_portfolio_size': equity,
-    'max_drawdown': 45.5,
+    'max_drawdown': 75.5,
     'alpaca_api': api,
-    'max_risk_per_trade': 0.1183,
+    'max_risk_per_trade': 0.07183,
     'max_crypto_equity': max_crypto_equity
 }
 
@@ -54,7 +54,7 @@ class RiskManagement:
         equity = float(account.equity)
         margin = float(account.initial_margin)
 
-        rebalance_threshold = (equity - margin) * 0.20
+        rebalance_threshold = (equity - margin) * 0.07
 
         positions = self.api.list_positions()
 
@@ -379,11 +379,18 @@ class RiskManagement:
 
         if current_price == 0 or current_price is None:
             print(f"Current price for {symbol} is zero or None. Returning quantity 0.")
-            return 1
+            return 0
 
-        # Calculate the quantity based on the max_position_size parameter
-        # We are rounding down to ensure we don't exceed max_position_size due to rounding issues
-        quantity = int(self.risk_params['max_position_size'] / current_price)
+        # Calculate a preliminary quantity based on the max_position_size parameter
+        preliminary_quantity = self.risk_params['max_position_size'] / current_price
+
+        # Tiered system for quantity adjustment
+        if current_price > 10000:  # High priced assets like BTC
+            quantity = preliminary_quantity * 0.1  # buy less of high priced assets
+        elif 1000 < current_price <= 10000:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.5  # buy moderate quantity
+        else:  # Low-priced assets
+            quantity = preliminary_quantity  # buy more of low priced assets
 
         print(f"Calculated quantity for {symbol}: {quantity}")
         return quantity
