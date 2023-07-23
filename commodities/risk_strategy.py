@@ -26,7 +26,12 @@ risk_params = {
     'alpaca_api': api,
     'max_risk_per_trade': 0.07183,
     'max_crypto_equity': max_crypto_equity
+
 }
+
+risk_params['max_position_size'] *= 0.985
+
+print(risk_params['max_position_size'])
 
 
 class RiskManagement:
@@ -44,29 +49,34 @@ class RiskManagement:
     def get_equity(self):
         return float(self.api.get_account().equity)
 
-
     def rebalance_positions(self):
-        """
-        Rebalance positions if any exceed 20% of equity - margin
-        """
 
         account = self.api.get_account()
+
         equity = float(account.equity)
         margin = float(account.initial_margin)
 
-        rebalance_threshold = (equity - margin) * 0.07
+        rebalance_threshold = (equity - margin) * 0.9685
 
         positions = self.api.list_positions()
 
         for position in positions:
-            position_value = float(position.qty) * float(position.current_price)
+
+            qty = float(position.qty)
+
+            position_value = qty * float(position.current_price)
 
             if position_value > rebalance_threshold:
-                shares_to_sell = int((position_value - rebalance_threshold) / float(position.current_price))
-                print(f"Total Shares to sell: {shares_to_sell}")
 
-                self.api.submit_order(symbol=position.symbol, qty=shares_to_sell, side='sell', type='market',
-                                      time_in_force='gtc')
+                shares_to_sell = int((position_value - rebalance_threshold) / float(position.current_price))
+
+                if shares_to_sell > qty:
+                    shares_to_sell = qty
+
+                print(f"Selling {shares_to_sell} shares of {position.symbol}")
+
+                api.submit_order(symbol=position.symbol, qty=shares_to_sell, side='sell', type='market',
+                                 time_in_force='gtc')
 
 
 
@@ -214,28 +224,25 @@ class RiskManagement:
             return None
 
     def update_risk_parameters(self):
-        # Dynamically adjust risk parameters based on account performance
-        try:
-            pnl = self.report_profit_and_loss()
-            current_equity = self.get_equity()
-            self.risk_params[
-                'max_portfolio_size'] = current_equity  # Update the max_portfolio_size with the current equity
+    # Dynamically adjust risk parameters based on account performance
+        pnl = self.report_profit_and_loss()
+        current_equity = self.get_equity()
+        self.risk_params[
+            'max_portfolio_size'] = current_equity  # Update the max_portfolio_size with the current equity
 
-            if pnl < 0:
-                print("PnL is negative, reducing risk parameters...")
-                self.risk_params['max_position_size'] *= 0.9  # reduce by 10%
-                self.risk_params['max_portfolio_size'] *= 0.9  # reduce by 10%
-            elif pnl > 0:
-                print("PnL is positive, increasing risk parameters...")
-                self.risk_params['max_position_size'] *= 1.043  # increase by 10%
-                self.risk_params['max_portfolio_size'] *= 1.043  # increase by 10%
-            else:
-                print("PnL is neutral, no changes to risk parameters.")
-            print("Risk parameters updated.")
-            return self.risk_params
-        except Exception as e:
-            print(f"An exception occurred while updating risk parameters: {str(e)}")
-            return self.risk_params
+        if pnl < 1.5:
+            print("PnL is negative, reducing risk parameters...")
+            self.risk_params['max_position_size'] *= 0.9  # reduce by 10%
+            self.risk_params['max_portfolio_size'] *= 0.9  # reduce by 10%
+        elif pnl > 0:
+            print("PnL is posit`ive, increasing risk parameters...")
+            self.risk_params['max_position_size'] *= 1.043  # increase by 10%
+            self.risk_params['max_portfolio_size'] *= 1.043  # increase by 10%
+        else:
+            print("PnL is neutral, no changes to risk parameters.")
+        print("Risk parameters updated.")
+        return self.risk_params
+
 
     def calculate_drawdown(self):
         try:
