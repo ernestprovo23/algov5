@@ -3,53 +3,11 @@ import logging
 import pandas as pd
 import alpaca_trade_api as tradeapi
 from credentials import ALPACA_API_KEY, ALPACA_SECRET_KEY
-from risk_strategy import RiskManagement, risk_params, send_teams_message
+from risk_strategy import RiskManagement, risk_params, send_teams_message, CryptoAsset, PortfolioManager
 from trade_stats import record_trade
 
 # Set up logging
 logging.basicConfig(filename='master_script.log', level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
-
-# Define a class to represent a crypto asset
-class CryptoAsset:
-    def __init__(self, symbol, quantity, value_usd):
-        self.symbol = symbol
-        self.quantity = quantity
-        self.value_usd = value_usd
-
-# Define a class to manage the portfolio
-class PortfolioManager:
-    def __init__(self, api):
-        self.api = api
-        self.assets = {}
-        self.operations = 0  # track the number of operations
-
-    def increment_operations(self):
-        self.operations += 1
-
-    def add_asset(self, symbol, quantity, value_usd):
-        self.assets[symbol] = CryptoAsset(symbol, quantity, value_usd)
-
-    def update_asset_value(self, symbol, value_usd):
-        if symbol in self.assets:
-            self.assets[symbol].value_usd = value_usd
-
-    def portfolio_value(self):
-        return sum(asset.value_usd for asset in self.assets.values())
-
-    def portfolio_balance(self):
-        return {symbol: (asset.value_usd / self.portfolio_value()) * 100 for symbol, asset in self.assets.items()}
-
-    def sell_decision(self, symbol):
-        balance = self.portfolio_balance()
-
-        if balance[symbol] > 25 or balance[symbol] > 0.4 * sum(balance.values()):
-            return True
-        else:
-            return False
-
-    def scale_out(self, symbol):
-        quantity_to_sell = int(self.assets[symbol].quantity * 0.1)  # Sell 10% of holdings
-        return quantity_to_sell
 
 
 def get_files_in_current_directory():
@@ -113,7 +71,7 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
                         type='market',
                         time_in_force='gtc'
                     )
-                    manager.add_asset(symbol, quantity, avg_entry_price * quantity)  # Adding new asset to portfolio
+                    manager.add_asset(symbol, quantity, avg_entry_price * quantity)
                     manager.increment_operations()  # increment the number of operations
                 except Exception as e:
                     logging.error(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
@@ -219,6 +177,9 @@ def process_signals():
 
     # Initialize RiskManagement
     risk_management = RiskManagement(api, risk_params)
+
+    # Update asset values from 24 hours ago
+    manager.update_asset_values_24h()
 
     # get the current directory
     current_directory = os.getcwd()
