@@ -17,21 +17,68 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.2
+max_crypto_equity = equity * 0.4
 
-risk_params = {
-    'max_position_size': 1250,
-    'max_portfolio_size': equity,
-    'max_drawdown': 75.5,
-    'alpaca_api': api,
-    'max_risk_per_trade': 0.07183,
-    'max_crypto_equity': max_crypto_equity
-
-}
-
-risk_params['max_position_size'] *= 0.985
+# read the risk_params in and use the values
+# these are updated by the algorithm below by pnl
+with open('risk_params.json', 'r') as f:
+    risk_params = json.load(f)
 
 print(risk_params['max_position_size'])
+
+# Define a class to represent a crypto asset
+class CryptoAsset:
+    def __init__(self, symbol, quantity, value_usd):
+        self.symbol = symbol
+        self.quantity = quantity
+        self.value_usd = value_usd
+        self.value_24h_ago = None  # to store the value 24 hours ago
+
+    def profit_loss_24h(self):
+        if self.value_24h_ago is not None:
+            return (self.value_usd - self.value_24h_ago) / self.value_24h_ago * 100
+        else:
+            return None
+
+
+# Define a class to manage the portfolio
+class PortfolioManager:
+    def __init__(self, api):
+        self.api = api
+        self.assets = {}
+        self.operations = 0  # track the number of operations
+
+    def increment_operations(self):
+        self.operations += 1
+
+    def add_asset(self, symbol, quantity, value_usd):
+        self.assets[symbol] = CryptoAsset(symbol, quantity, value_usd)
+
+    def update_asset_value(self, symbol, value_usd):
+        if symbol in self.assets:
+            self.assets[symbol].value_usd = value_usd
+
+    def portfolio_value(self):
+        return sum(asset.value_usd for asset in self.assets.values())
+
+    def portfolio_balance(self):
+        return {symbol: (asset.value_usd / self.portfolio_value()) * 100 for symbol, asset in self.assets.items()}
+
+    def sell_decision(self, symbol):
+        balance = self.portfolio_balance()
+
+        if balance[symbol] > 25 or balance[symbol] > 0.4 * sum(balance.values()):
+            return True
+        else:
+            return False
+
+    def scale_out(self, symbol):
+        quantity_to_sell = int(self.assets[symbol].quantity * 0.1)  # Sell 10% of holdings
+        return quantity_to_sell
+
+    def update_asset_values_24h(self):
+        for asset in self.assets.values():
+            asset.value_24h_ago = asset.value_usd
 
 
 class RiskManagement:
@@ -39,15 +86,13 @@ class RiskManagement:
         self.api = api
         self.risk_params = risk_params
         self.alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
+        self.manager = PortfolioManager(api)  # Initialize PortfolioManager here
 
         # Get account info
         account = self.api.get_account()
 
         # Initialize self.peak_portfolio_value with the current cash value
         self.peak_portfolio_value = float(account.cash)
-
-    def get_equity(self):
-        return float(self.api.get_account().equity)
 
     def rebalance_positions(self):
 
@@ -94,6 +139,15 @@ class RiskManagement:
 
             if current_price is None:
                 raise Exception(f"Error: could not fetch current price for {symbol}")
+
+            asset = self.manager.assets.get(symbol)
+
+            if asset:
+                pnl_24h = asset.profit_loss_24h()
+
+                # if there has been a loss in the last 24 hours, disallow the trade
+                if pnl_24h is not None and pnl_24h < 0:
+                    return False
 
             if qty <= 0 or current_price <= 0:
                 print(
@@ -223,26 +277,33 @@ class RiskManagement:
             print(f"An exception occurred while reporting profit and loss: {str(e)}")
             return None
 
-    def update_risk_parameters(self):
-    # Dynamically adjust risk parameters based on account performance
+    def get_equity(self):
+        return float(self.api.get_account().equity)
+
+    def update_risk_parameters(self, current_equity):
+        # Dynamically adjust risk parameters based on account performance
         pnl = self.report_profit_and_loss()
-        current_equity = self.get_equity()
+        account = self.api.get_account()
+        current_equity = float(account.equity)
+
+
         self.risk_params[
             'max_portfolio_size'] = current_equity  # Update the max_portfolio_size with the current equity
 
-        if pnl < 1.5:
+        if pnl <= 105:
             print("PnL is negative, reducing risk parameters...")
-            self.risk_params['max_position_size'] *= 0.9  # reduce by 10%
-            self.risk_params['max_portfolio_size'] *= 0.9  # reduce by 10%
-        elif pnl > 0:
-            print("PnL is posit`ive, increasing risk parameters...")
-            self.risk_params['max_position_size'] *= 1.043  # increase by 10%
-            self.risk_params['max_portfolio_size'] *= 1.043  # increase by 10%
+            self.risk_params['max_position_size'] *= 0.96  # reduce by 4%
+            self.risk_params['max_portfolio_size'] *= 0.96  # reduce by 4%
+        elif pnl >= 110:
+            print("PnL is positive, increasing risk parameters...")
+            self.risk_params['max_position_size'] *= 1.10  # increase by 10%
+            self.risk_params['max_portfolio_size'] *= 1.1065  # increase by 10%
         else:
             print("PnL is neutral, no changes to risk parameters.")
+        with open('risk_params.json', 'w') as f:
+            json.dump(self.risk_params, f)
         print("Risk parameters updated.")
         return self.risk_params
-
 
     def calculate_drawdown(self):
         try:
@@ -268,26 +329,32 @@ class RiskManagement:
         """
         Check the risk parameters before placing an order.
 
-        The function will prevent an order if the new shares would result in a position size
-        that violates the risk parameters.
+        The function will prevent an order if the new shares would result in buying power
+        falling below a certain threshold (in this case, 10% of the account equity).
         """
-        # Get the current position
-        try:
-            current_position = self.api.get_position(symbol)
-            current_shares = float(current_position.qty)
-        except:
-            current_shares = 0
+        # Calculate the cost of the new shares
+        new_shares_cost = float(new_shares) * self.get_current_price(symbol)
 
-        # Calculate the new quantity of shares after the purchase
-        total_shares = current_shares + float(new_shares)
+        # Calculate the buying power threshold, which is 10% of the account equity
+        buying_power_threshold = 0.1 * float(self.api.get_account().equity)
 
-        # Check if the new quantity violates the risk parameters
-        if total_shares > self.risk_params['max_position_size']:
-            # If the new quantity violates the max position size, prevent the order
+        # Check if the cost of the new shares is more than the buying power or if it violates the buying power threshold
+        if (self.api.get_account().cash - new_shares_cost) < buying_power_threshold:
+            # If the new cash balance after buying shares is less than the buying power threshold, prevent the order
             return False
         else:
-            # If the new quantity doesn't violate the risk parameters, adjust the quantity and place the order
-            delta_shares = self.risk_params['max_position_size'] - current_shares
+            # Get the current position
+            try:
+                current_position = self.api.get_position(symbol)
+                current_shares = float(current_position.qty)
+            except:
+                current_shares = 0
+
+            # Calculate the new quantity of shares after the purchase
+            total_shares = current_shares + float(new_shares)
+
+            # If the new quantity doesn't violate the buying power and cash reserve, adjust the quantity and place the order
+            delta_shares = buying_power_threshold - current_shares
 
             if delta_shares > 0:
                 # Get the average entry price
@@ -630,10 +697,13 @@ if __name__ == "__main__":
     risk_manager.monitor_account_status()
     risk_manager.monitor_positions()
     risk_manager.report_profit_and_loss()
-    risk_manager.update_risk_parameters()
+    account = risk_manager.api.get_account()
+    current_equity = float(account.equity)
+    risk_manager.update_risk_parameters(current_equity=current_equity)
+
     risk_manager.rebalance_positions()
 
-    account = risk_manager.api.get_account()  # added this line to get account details
+    account = risk_manager.api.get_account()
     portfolio = risk_manager.api.list_positions()
 
     portfolio_summary = {}

@@ -12,6 +12,29 @@ import os
 from trade_stats import record_trade
 from azure.storage.blob import BlobServiceClient
 from s3connector import azure_connection_string
+import logging
+import json
+
+
+def send_teams_message(teams_url, message):
+    data = {'text': message}
+    headers = {'Content-Type': 'application/json'}
+    try:
+        response = requests.post(teams_url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        logging.info(f"Message sent to Teams successfully: {message}")
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"HTTP error occurred when sending message to Teams: {http_err}")
+    except requests.exceptions.RequestException as req_err:
+        logging.error(f"Request error occurred when sending message to Teams: {req_err}")
+    except Exception as e:
+        logging.error(f"Unexpected error occurred when sending message to Teams: {e}")
+
+# Your Microsoft Teams channel webhook URL
+teams_url = 'https://data874.webhook.office.com/webhookb2/9cb96ee7-c2ce-44bc-b4fe-fe2f6f308909@4f84582a-9476-452e-a8e6-0b57779f244f/IncomingWebhook/7e8bd751e7b4457aba27a1fddc7e8d9f/6d2e1385-bdb7-4890-8bc5-f148052c9ef5'
+
+send_teams_message(teams_url, "Script started.")
+
 
 blob_service_client = BlobServiceClient.from_connection_string(azure_connection_string)
 
@@ -153,7 +176,7 @@ def handle_symbol(symbol):
         recent_signal = float(macd_point['MACD_Signal'])
         recent_sma = float(sma_point['SMA'])
 
-        if recent_rsi <= 64.5:
+        if recent_rsi <= 54.5:
             print(f"{symbol}: RSI condition met. Current: {recent_rsi}")
         else:
             print(f"{symbol}: RSI condition not met. Current: {recent_rsi}")
@@ -163,10 +186,10 @@ def handle_symbol(symbol):
         else:
             print(f"{symbol}: MACD condition not met. Current: {recent_macd}")
 
-        if recent_close >= recent_sma:
-            print(f"{symbol}: Price above SMA condition met. Current: {recent_close} / {recent_sma}")
+        if recent_close <= recent_sma:
+            print(f"{symbol}: SMA condition met. Current: {recent_close} / {recent_sma}")
         else:
-            print(f"{symbol}: Price above SMA condition not met. Current: {recent_close} / {recent_sma}. ")
+            print(f"{symbol}: SMA condition not met. Current: {recent_close} / {recent_sma}. ")
 
         if recent_rsi <= 64.5 and recent_macd >= recent_signal and recent_close >= recent_sma:
             # Check if we already have a position or an open order for this symbol
@@ -194,7 +217,7 @@ def handle_symbol(symbol):
 
 
 # Use ThreadPoolExecutor to handle the symbols in parallel
-with ThreadPoolExecutor(max_workers=20) as executor:
+with ThreadPoolExecutor(max_workers=10) as executor:
     futures = [executor.submit(handle_symbol, symbol) for symbol in symbols]
 
 for future in as_completed(futures):
