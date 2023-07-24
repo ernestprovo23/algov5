@@ -17,7 +17,7 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.2
+max_crypto_equity = equity * 0.4
 
 # read the risk_params in and use the values
 # these are updated by the algorithm below by pnl
@@ -80,6 +80,47 @@ class PortfolioManager:
         for asset in self.assets.values():
             asset.value_24h_ago = asset.value_usd
 
+    def calc_24h_pnl(self, symbol):
+
+        positions = self.api.list_positions()
+
+        for position in positions:
+
+            if position.symbol == symbol:
+
+                curr_price = float(position.current_price)
+                prev_day_qty = float(position.qty) - float(position.change_today)
+
+                prev_day_value = prev_day_qty * curr_price
+                curr_value = float(position.current_price) * float(position.qty)
+
+                # Calculate percentage change
+                change = curr_value - prev_day_value
+                if prev_day_value > 0:
+                    return change / prev_day_value * 100
+                else:
+                    return 0
+
+        return 0  # default if symbol not found
+
+    def submit_order(self, symbol, qty, side):
+
+        if isinstance(qty, float):
+            qty = str(qty)
+
+        try:
+            if side == 'buy':
+                order = self.api.submit_order(symbol, qty, 'buy', 'market', 'gtc')
+            elif side == 'sell':
+                order = self.api.submit_order(symbol, qty, 'sell', 'market', 'gtc')
+
+            print(f"Submitted {side} order for {qty} shares of {symbol}")
+            return order
+
+        except Exception as e:
+            print(f"Error submitting {side} order: {e}")
+            return None
+
 
 class RiskManagement:
     def __init__(self, api, risk_params):
@@ -123,6 +164,44 @@ class RiskManagement:
                 api.submit_order(symbol=position.symbol, qty=shares_to_sell, side='sell', type='market',
                                  time_in_force='gtc')
 
+
+
+
+    def check_position_losses(self):
+
+        positions = self.api.list_positions()
+
+        for position in positions:
+
+            curr_pnl = float(position.unrealized_pl)
+            avg_entry_price = float(position.avg_entry_price)
+
+            curr_pnl_pct = (curr_pnl / avg_entry_price)
+
+            print(f"Position symbol: {position.symbol}")
+            print(f"Current PnL: {curr_pnl}")
+            print(f"Current PnL %: {curr_pnl_pct}")
+
+            curr_24h_pnl = self.manager.calc_24h_pnl(position.symbol)
+
+            print(f"24 hour PnL: {curr_24h_pnl}")
+
+            max_risk = self.risk_params['max_risk_per_trade']
+            loss_threshold = (-0.5 * max_risk) * 100
+
+            print(f"Loss threshold: {loss_threshold}")
+
+            if curr_24h_pnl <= loss_threshold:
+                print(f"Loss detected for {position.symbol}")
+
+                shares_to_sell = float(position.qty) * 0.0543
+
+                print(f"Shares to sell: {shares_to_sell}")
+
+                order = self.manager.submit_order(position.symbol, shares_to_sell, 'sell')
+                print(f"Order details: {order}")
+
+        print("Checked position losses.")
 
 
     def validate_trade(self, symbol, qty, order_type):
@@ -223,7 +302,13 @@ class RiskManagement:
 
                     position = position_list[0]
 
-                    if float(position.qty) < qty:  # Here is the change, convert string to float
+                    if float(position.qty) < qty:
+                        print(f"Sell quantity {qty} exceeds position size {position.qty}")
+                        return False
+
+                    # Added check for fractional quantities
+                    if isinstance(qty, float) and float(position.qty) < qty:
+                        print(f"Fractional quantity {qty} validated")
 
                         print(
 
@@ -329,26 +414,32 @@ class RiskManagement:
         """
         Check the risk parameters before placing an order.
 
-        The function will prevent an order if the new shares would result in a position size
-        that violates the risk parameters.
+        The function will prevent an order if the new shares would result in buying power
+        falling below a certain threshold (in this case, 10% of the account equity).
         """
-        # Get the current position
-        try:
-            current_position = self.api.get_position(symbol)
-            current_shares = float(current_position.qty)
-        except:
-            current_shares = 0
+        # Calculate the cost of the new shares
+        new_shares_cost = float(new_shares) * self.get_current_price(symbol)
 
-        # Calculate the new quantity of shares after the purchase
-        total_shares = current_shares + float(new_shares)
+        # Calculate the buying power threshold, which is 10% of the account equity
+        buying_power_threshold = 0.1 * float(self.api.get_account().equity)
 
-        # Check if the new quantity violates the risk parameters
-        if total_shares > self.risk_params['max_position_size']:
-            # If the new quantity violates the max position size, prevent the order
+        # Check if the cost of the new shares is more than the buying power or if it violates the buying power threshold
+        if (self.api.get_account().cash - new_shares_cost) < buying_power_threshold:
+            # If the new cash balance after buying shares is less than the buying power threshold, prevent the order
             return False
         else:
-            # If the new quantity doesn't violate the risk parameters, adjust the quantity and place the order
-            delta_shares = self.risk_params['max_position_size'] - current_shares
+            # Get the current position
+            try:
+                current_position = self.api.get_position(symbol)
+                current_shares = float(current_position.qty)
+            except:
+                current_shares = 0
+
+            # Calculate the new quantity of shares after the purchase
+            total_shares = current_shares + float(new_shares)
+
+            # If the new quantity doesn't violate the buying power and cash reserve, adjust the quantity and place the order
+            delta_shares = buying_power_threshold - current_shares
 
             if delta_shares > 0:
                 # Get the average entry price
@@ -696,6 +787,8 @@ if __name__ == "__main__":
     risk_manager.update_risk_parameters(current_equity=current_equity)
 
     risk_manager.rebalance_positions()
+
+    risk_manager.check_position_losses()
 
     account = risk_manager.api.get_account()
     portfolio = risk_manager.api.list_positions()
