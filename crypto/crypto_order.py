@@ -10,6 +10,7 @@ from trade_stats import record_trade
 logging.basicConfig(filename='master_script.log', level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
 
 
+
 def get_files_in_current_directory():
     return [f for f in os.listdir() if os.path.isfile(f)]
 
