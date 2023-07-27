@@ -7,13 +7,14 @@ from credentials import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPHA_VANTAGE_API
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from alpha_vantage.techindicators import TechIndicators
 import requests
-import json
 import os
 from trade_stats import record_trade
 from azure.storage.blob import BlobServiceClient
-from s3connector import azure_connection_string
+from s3connector import azure_connection_string, connect_to_storage_account, download_blob
 import logging
 import json
+import time
+import math
 
 
 def send_teams_message(teams_url, message):
@@ -33,11 +34,9 @@ def send_teams_message(teams_url, message):
 # Your Microsoft Teams channel webhook URL
 teams_url = 'https://data874.webhook.office.com/webhookb2/9cb96ee7-c2ce-44bc-b4fe-fe2f6f308909@4f84582a-9476-452e-a8e6-0b57779f244f/IncomingWebhook/7e8bd751e7b4457aba27a1fddc7e8d9f/6d2e1385-bdb7-4890-8bc5-f148052c9ef5'
 
-send_teams_message(teams_url, "Script started.")
-
+send_teams_message(teams_url, "Bracket Order Script Being Run.")
 
 blob_service_client = BlobServiceClient.from_connection_string(azure_connection_string)
-
 
 # Get the path of the script's directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,14 +50,25 @@ rm = RiskManagement(api, risk_params)
 
 
 def get_symbols_from_csv():
-    # Construct the path to the selected_csv file in the same directory as the script
+    # Setup Azure connection
+    blob_service_client = connect_to_storage_account(azure_connection_string)
+
+    # Define the container and blob names
+    container_name = 'historic'
+    blob_name = 'selected_pairs.csv'
+
+    # Define the local path where the downloaded file will be stored
     csv_file = os.path.join(script_dir, "selected_pairs.csv")
+
+    # Download the file from Azure Blob Storage
+    download_blob(blob_service_client, container_name, blob_name, csv_file)
 
     # Load the csv_data into a DataFrame
     csv_df = pd.read_csv(csv_file)
 
     # Extract the symbols and return them as a list
     return csv_df["Symbol"].unique().tolist()
+
 
 def get_holdings(api):
     current_positions = api.list_positions()
@@ -89,41 +99,87 @@ def send_teams_message(message):
     response = requests.post(teams_url, headers=headers, data=json.dumps(message))
     return response.status_code
 
-def place_order(api, symbol, shares, close_price):
+
+def is_fractionable(api, symbol):
+    # Get asset information
+    asset = api.get_asset(symbol)
+
+    # Return the fractionable status
+    return asset.fractionable
+
+
+def place_order(api, symbol, shares, recent_close):
+    # Ensure recent_close is a number
     try:
-        # Check if the risk parameters are violated
-        if not rm.check_risk_before_order(symbol, shares):
-            print(f"Risk parameters violation, order for {symbol} not placed")
-            return False
+        recent_close = float(recent_close)
+    except ValueError:
+        print(f"recent_close for {symbol} is not a number: {recent_close}")
+        return
 
-        take_profit = {"limit_price": round(close_price * 1.0243, 2)}
-        stop_loss = {"stop_price": round(close_price * 0.9521, 2)}
-        client_order_id = f"gcos_{random.randrange(100000000)}"
-        print(f"{symbol}: Attempting to place an order!")
+    # Check if asset is fractionable
+    if not is_fractionable(api, symbol):
+        # Use the floor quantity for non-fractionable assets
+        shares = math.floor(shares) if shares >= 1 else math.ceil(shares)
 
-        order = api.submit_order(
+    # Ensure shares is a number and greater than zero
+    try:
+        shares = float(shares)
+        if shares <= 0:
+            raise ValueError
+    except ValueError:
+        print(f"Shares for {symbol} is not a number or not positive: {shares}")
+        return
+
+    # Calculate the stop and limit prices
+    take_profit_price = round(recent_close * 1.0443, 2)
+    stop_loss_price = round(recent_close * 0.9821, 2)
+    client_order_id = f"gcos_{random.randrange(100000000)}"
+
+    print("Submitting order...")
+
+    try:
+        # Place initial order
+        initial_order = api.submit_order(
             symbol=symbol,
-            qty=round(float(shares)),  # Shares rounded to the nearest whole number
+            qty=shares,
             side='buy',
+            type='market',
+            time_in_force='day',
+            client_order_id=client_order_id
+        )
+
+        # Place take-profit order
+        take_profit_order = api.submit_order(
+            symbol=symbol,
+            qty=shares,
+            side='sell',
             type='limit',
-            limit_price=round(close_price, 2),
-            order_class='bracket',
-            take_profit=take_profit,
-            stop_loss=stop_loss,
-            client_order_id=client_order_id,
+            limit_price=take_profit_price,
             time_in_force='day'
         )
+
+        # Place stop-loss order
+        stop_loss_order = api.submit_order(
+            symbol=symbol,
+            qty=shares,
+            side='sell',
+            type='stop',
+            stop_price=stop_loss_price,
+            time_in_force='day'
+        )
+
         print(f"{symbol}: order placed successfully!")
 
         # Record the trade
-        record_trade(symbol, round(float(shares)), round(close_price, 2))
+        record_trade(symbol, shares, recent_close)
 
         # Create a message to send to Teams channel
-        message = f"Order placed successfully! Symbol: {symbol}, Shares: {shares}, Price: {close_price}"
+        message = f"Order placed successfully! Symbol: {symbol}, Shares: {shares}, Price: {recent_close}"
         # Send message to Teams
         send_teams_message(message)
 
-        return True
+        return initial_order, take_profit_order, stop_loss_order
+
     except Exception as e:
         print(f"Order for {symbol} could not be placed: {str(e)}")
         return False
@@ -171,12 +227,13 @@ def handle_symbol(symbol):
         sma_point = list(sma_data['Technical Analysis: SMA'].values())[0]
 
         recent_close = float(daily_point['4. close'])
+
         recent_rsi = float(rsi_point['RSI'])
         recent_macd = float(macd_point['MACD'])
         recent_signal = float(macd_point['MACD_Signal'])
         recent_sma = float(sma_point['SMA'])
 
-        if recent_rsi <= 54.5:
+        if recent_rsi <= 50.5:
             print(f"{symbol}: RSI condition met. Current: {recent_rsi}")
         else:
             print(f"{symbol}: RSI condition not met. Current: {recent_rsi}")
@@ -191,8 +248,17 @@ def handle_symbol(symbol):
         else:
             print(f"{symbol}: SMA condition not met. Current: {recent_close} / {recent_sma}. ")
 
-        if recent_rsi <= 64.5 and recent_macd >= recent_signal and recent_close >= recent_sma:
+
+        if recent_rsi <= 50.5 and recent_macd >= recent_signal and recent_close >= recent_sma:
+            # Calculate shares once here
+            shares = int(risk_params['max_portfolio_size'] * risk_params['max_risk_per_trade']) / recent_close / 3
+
+            # Print shares type
+            print(f"Shares type for {symbol}: {type(shares)}")
+
             # Check if we already have a position or an open order for this symbol
+            print(current_holdings)
+            print(open_orders_symbols)
             if symbol in current_holdings or symbol in open_orders_symbols:
                 print(f"Already hold a position or have an open order in {symbol}, skipping order...")
             else:
@@ -203,6 +269,7 @@ def handle_symbol(symbol):
                     print(
                         f"Requested {shares} exceeds maximum position size, adjusting to {risk_params['max_position_size']}")
                     shares = risk_params['max_position_size']
+                    print(f"Shares type: {type(shares)}")
 
                 print(f"{symbol}: All conditions met. Place order for: {shares} shares.")
 
@@ -217,7 +284,7 @@ def handle_symbol(symbol):
 
 
 # Use ThreadPoolExecutor to handle the symbols in parallel
-with ThreadPoolExecutor(max_workers=10) as executor:
+with ThreadPoolExecutor(max_workers=3) as executor:
     futures = [executor.submit(handle_symbol, symbol) for symbol in symbols]
 
 for future in as_completed(futures):
