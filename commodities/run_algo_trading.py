@@ -41,8 +41,6 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # List your scripts in the desired order of execution
 scripts = [
-    "alphavantagetickers.py",
-    "company_overviews.py",
     "selected_pairs_history.py",
     "bracket_order.py"
 ]
