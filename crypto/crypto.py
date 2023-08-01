@@ -6,7 +6,7 @@ import concurrent.futures
 
 # Define the pairs
 usdt_usd_pairs = ['AAVE/USD', 'ALGO/USD', 'AVAX/USD', 'BCH/USD', 'BTC/USD', 'ETH/USD',
-                  'LINK/USD', 'LTC/USD', 'TRX/USD', 'UNI/USD']
+                  'LINK/USD', 'LTC/USD', 'TRX/USD', 'UNI/USD', 'USDT/USD', 'SHIB/USD']
 
 all_pairs = usdt_usd_pairs
 
