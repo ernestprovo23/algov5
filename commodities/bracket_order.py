@@ -48,6 +48,9 @@ api = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url='https://paper-a
 
 rm = RiskManagement(api, risk_params)
 
+# List to keep track of symbols that did not get purchased
+symbols_not_purchased = []
+
 
 def get_symbols_from_csv():
     # Setup Azure connection
@@ -76,28 +79,6 @@ def get_holdings(api):
     for position in current_positions:
         holdings[position.symbol] = position.qty
     return holdings
-
-def send_teams_message(message):
-    message = {
-        "@type": "MessageCard",
-        "@context": "http://schema.org/extensions",
-        "themeColor": "0076D7",
-        "summary": "Trade Orders Summary",
-        "sections": [{
-            "activityTitle": "Trade Orders Placed",
-            "activitySubtitle": "Summary of Buy and Sell Orders",
-            "facts": [{
-                "name": "Orders",
-                "value": message
-            }],
-            "markdown": True
-        }]
-    }
-    headers = {
-        "Content-type": "application/json",
-    }
-    response = requests.post(teams_url, headers=headers, data=json.dumps(message))
-    return response.status_code
 
 
 def is_fractionable(api, symbol):
@@ -274,9 +255,10 @@ def handle_symbol(symbol):
                 print(f"{symbol}: All conditions met. Place order for: {shares} shares.")
 
                 place_order(api, symbol, shares, recent_close)
-
         else:
             print(f"{symbol}: Not all conditions met. No order placed.")
+            symbols_not_purchased.append(symbol)
+
     except ValueError:
         print(f"Unable to fetch data for {symbol}. Skipping...")
     except Exception as e:
@@ -292,3 +274,11 @@ for future in as_completed(futures):
         data = future.result()
     except Exception as exc:
         print(f"An exception occurred in a thread: {str(exc)}")
+
+
+if symbols_not_purchased:
+    unpurchased_tickers_message = f"Tickers that did not get purchased: {', '.join(symbols_not_purchased)}"
+    send_teams_message(teams_url, unpurchased_tickers_message)
+else:
+    send_teams_message(teams_url, "All tickers were purchased successfully.")
+
