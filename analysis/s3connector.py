@@ -1,4 +1,4 @@
-azure_connection_string = "BlobEndpoint=https://dataexperts0101.blob.core.windows.net/;QueueEndpoint=https://dataexperts0101.queue.core.windows.net/;FileEndpoint=https://dataexperts0101.file.core.windows.net/;TableEndpoint=https://dataexperts0101.table.core.windows.net/;SharedAccessSignature=sv=2022-11-02&ss=bfqt&srt=co&sp=rwdlacupiytfx&se=2023-08-02T03:40:55Z&st=2023-05-12T19:40:55Z&spr=https&sig=e18QHc3fkrr28NMrp5Py8f8UK12hecOsc6A4Y6U%2FSVM%3D"
+azure_connection_string = "DefaultEndpointsProtocol=https;AccountName=dataexperts0101;AccountKey=nuvNVlxFcJu6oyvlZmPG+PVgXfJAXcVF3xhCdv0kPocwfvxMH7M7n4UKAmh8Cj06rnLu48wf4YUf+ASt1ld2ug==;EndpointSuffix=core.windows.net"
 
 from azure.storage.blob import BlobServiceClient
 
