@@ -17,7 +17,7 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.4
+max_crypto_equity = equity * 0.2
 
 # read the risk_params in and use the values
 # these are updated by the algorithm below by pnl
@@ -33,6 +33,8 @@ class CryptoAsset:
         self.quantity = quantity
         self.value_usd = value_usd
         self.value_24h_ago = None  # to store the value 24 hours ago
+        self.crypto_symbols = ['AAVE/USD', 'ALGO/USD', 'AVAX/USD', 'BCH/USD', 'BTC/USD', 'ETH/USD',
+                  'LINK/USD', 'LTC/USD', 'TRX/USD', 'UNI/USD']
 
     def profit_loss_24h(self):
         if self.value_24h_ago is not None:
@@ -80,54 +82,16 @@ class PortfolioManager:
         for asset in self.assets.values():
             asset.value_24h_ago = asset.value_usd
 
-    def calc_24h_pnl(self, symbol):
-
-        positions = self.api.list_positions()
-
-        for position in positions:
-
-            if position.symbol == symbol:
-
-                curr_price = float(position.current_price)
-                prev_day_qty = float(position.qty) - float(position.change_today)
-
-                prev_day_value = prev_day_qty * curr_price
-                curr_value = float(position.current_price) * float(position.qty)
-
-                # Calculate percentage change
-                change = curr_value - prev_day_value
-                if prev_day_value > 0:
-                    return change / prev_day_value * 100
-                else:
-                    return 0
-
-        return 0  # default if symbol not found
-
-    def submit_order(self, symbol, qty, side):
-
-        if isinstance(qty, float):
-            qty = str(qty)
-
-        try:
-            if side == 'buy':
-                order = self.api.submit_order(symbol, qty, 'buy', 'market', 'gtc')
-            elif side == 'sell':
-                order = self.api.submit_order(symbol, qty, 'sell', 'market', 'gtc')
-
-            print(f"Submitted {side} order for {qty} shares of {symbol}")
-            return order
-
-        except Exception as e:
-            print(f"Error submitting {side} order: {e}")
-            return None
-
 
 class RiskManagement:
+    crypto_symbols = ['AAVE/USD', 'ALGO/USD', 'AVAX/USD', 'BCH/USD', 'BTC/USD', 'ETH/USD',
+                  'LINK/USD', 'LTC/USD', 'TRX/USD', 'UNI/USD', 'USDT/USD', 'SHIB/USD']
     def __init__(self, api, risk_params):
         self.api = api
         self.risk_params = risk_params
         self.alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
         self.manager = PortfolioManager(api)  # Initialize PortfolioManager here
+
 
         # Get account info
         account = self.api.get_account()
@@ -136,194 +100,169 @@ class RiskManagement:
         self.peak_portfolio_value = float(account.cash)
 
     def rebalance_positions(self):
-
         account = self.api.get_account()
-
         equity = float(account.equity)
-        margin = float(account.initial_margin)
-
-        rebalance_threshold = (equity - margin) * 0.9685
-
         positions = self.api.list_positions()
 
-        for position in positions:
+        # Calculating the overall portfolio value
+        portfolio_value = sum([float(position.current_price) * float(position.qty) for position in positions])
 
+        # Loop through positions and analyze each one
+        for position in positions:
+            symbol = position.symbol
             qty = float(position.qty)
+            current_price = float(position.current_price)
+            position_value = qty * current_price
 
-            position_value = qty * float(position.current_price)
+            # Check if this position's symbol ends with USD; if not, adjust logic accordingly
+            if symbol.endswith("USD"):
+                base_currency = symbol[:-3]
+                quote_currency = "USD"
+                closing_price = get_alpha_vantage_data(base_currency, quote_currency)
+            else:
+                closing_price = float(api.get_latest_bar(symbol).c)
 
-            if position_value > rebalance_threshold:
+            if closing_price is None:
+                print(f"Error getting closing price for {symbol}. Skipping...")
+                continue
 
-                shares_to_sell = int((position_value - rebalance_threshold) / float(position.current_price))
+            # Calculating profitability
+            profitability = (current_price - float(position.avg_entry_price)) / float(position.avg_entry_price) * 100
+            print(symbol, profitability)
 
-                if shares_to_sell > qty:
-                    shares_to_sell = qty
+            # Check if profitability is below the threshold
+            if profitability < -2.3:
+                # Check relative weight of this asset in the portfolio
+                relative_weight = position_value / portfolio_value
 
-                print(f"Selling {shares_to_sell} shares of {position.symbol}")
+                # You may introduce additional logic to determine the sell quantity and limit price
+                shares_to_sell = int(qty * 0.35)  # Example: selling 35% of holdings
+                price_at_which_to_sell = current_price * 0.99  # setting a limit price 1% below current price
 
-                api.submit_order(symbol=position.symbol, qty=shares_to_sell, side='sell', type='market',
-                                 time_in_force='gtc')
+                # Only selling if the asset's relative weight in the portfolio is above a certain threshold
+                if relative_weight > 0.0123:  # Example: 1.23%
+                    print(
+                        f"Trying to sell {shares_to_sell} shares of {symbol}. Profitability: {profitability}%, Relative Weight: {relative_weight}")
 
+                    dollar_amount_to_sell = shares_to_sell * current_price
+                    if dollar_amount_to_sell > 0:
+                        qty_to_sell = int(dollar_amount_to_sell / current_price)
 
+                        api.submit_order(
+                            symbol=symbol,
+                            qty=qty_to_sell,
+                            side='sell',
+                            type='limit',
+                            limit_price=price_at_which_to_sell,
+                            time_in_force='gtc'
+                        )
 
-
-    def check_position_losses(self):
-
+    def get_position(self, symbol):
+        """
+        Get position details for a specific symbol
+        """
         positions = self.api.list_positions()
 
-        for position in positions:
+        # Filter positions to find matches for the symbol
+        symbol_positions = [p for p in positions if p.symbol == symbol]
 
-            curr_pnl = float(position.unrealized_pl)
-            avg_entry_price = float(position.avg_entry_price)
+        if not symbol_positions:
+            print(f"No positions found for {symbol}")
+            return None
 
-            curr_pnl_pct = (curr_pnl / avg_entry_price)
+        # Assuming there's only one position per symbol
+        p = symbol_positions[0]
+        pos = {
+            "symbol": p.symbol,
+            "qty": p.qty,
+            "avg_entry_price": p.avg_entry_price
+        }
 
-            print(f"Position symbol: {position.symbol}")
-            print(f"Current PnL: {curr_pnl}")
-            print(f"Current PnL %: {curr_pnl_pct}")
-
-            curr_24h_pnl = self.manager.calc_24h_pnl(position.symbol)
-
-            print(f"24 hour PnL: {curr_24h_pnl}")
-
-            max_risk = self.risk_params['max_risk_per_trade']
-            loss_threshold = (-0.5 * max_risk) * 100
-
-            print(f"Loss threshold: {loss_threshold}")
-
-            if curr_24h_pnl <= loss_threshold:
-                print(f"Loss detected for {position.symbol}")
-
-                shares_to_sell = float(position.qty) * 0.0543
-
-                print(f"Shares to sell: {shares_to_sell}")
-
-                order = self.manager.submit_order(position.symbol, shares_to_sell, 'sell')
-                print(f"Order details: {order}")
-
-        print("Checked position losses.")
+        return pos
 
 
     def validate_trade(self, symbol, qty, order_type):
+
         try:
-            qty = float(qty)  # convert qty to float vs string
+            qty = float(qty)
+
             print(f"Validating trade for {symbol}...")
+
             portfolio = self.api.list_positions()
-            portfolio_symbols = [position.symbol for position in portfolio]
+            portfolio_symbols = [p.symbol for p in portfolio]
             print(f"Current portfolio symbols: {portfolio_symbols}")
-            portfolio_value = sum([float(position.current_price) * float(position.qty) for position in portfolio])
+
+            portfolio_value = sum([float(p.current_price) * float(p.qty) for p in portfolio])
             print(f"Current portfolio value: {portfolio_value}")
 
-            current_price = self.get_current_price(symbol)  # Use current price instead of average entry price
+            current_price = self.get_current_price(symbol)
 
             if current_price is None:
-                raise Exception(f"Error: could not fetch current price for {symbol}")
-
-            asset = self.manager.assets.get(symbol)
-
-            if asset:
-                pnl_24h = asset.profit_loss_24h()
-
-                # if there has been a loss in the last 24 hours, disallow the trade
-                if pnl_24h is not None and pnl_24h < 0:
-                    return False
-
-            if qty <= 0 or current_price <= 0:
-                print(
-                    f"Quantity or current price for {symbol} is zero or less. Skipping validation and order placement.")
-                return False
+                raise Exception(f"Could not get current price for {symbol}")
 
             print(f"Current price for {symbol}: {current_price}")
 
-            print(f"Quantity (qty): {qty}, Type: {type(qty)}")
-            print(f"Current Price: {current_price}, Type: {type(current_price)}")
-            proposed_trade_value = current_price * qty
-            print(f"Proposed trade value for {symbol}: {proposed_trade_value}")
+            print(f"Quantity: {qty}")
+            print(f"Current Price: {current_price}")
 
-            # Calculate the current equity in cryptocurrencies
-            crypto_equity = sum([float(position.current_price) * float(position.qty) for position in portfolio if
-                                 position.symbol.startswith('C:')])
-            print(f"Current crypto equity: {crypto_equity}")
+            proposed_trade_value = current_price * qty
+            print(f"Proposed trade value: {proposed_trade_value}")
 
             open_orders = self.api.list_orders(status='open')
-            open_order_symbols = [order.symbol for order in open_orders]
-            print(f"Open order symbols: {open_order_symbols}")
+            open_symbols = [o.symbol for o in open_orders]
+            print(f"Open order symbols: {open_symbols}")
 
-            # Ensure no more than 20% of total cash is used for any one trade
             account_cash = float(self.api.get_account().cash)
             print(f"Account cash: {account_cash}")
-            if proposed_trade_value > account_cash * 0.2:
-                print(f"Proposed trade for {qty} shares of {symbol} exceeds 20% of available cash.")
+
+            if proposed_trade_value > account_cash * 0.45:
+                print("Proposed trade exceeds 20% of account cash")
                 return False
 
-            if order_type == 'buy':
-                # Check if a new buy order would violate the risk parameters
-                if not self.check_risk_before_order(symbol, qty):  # qty is your new_shares
-                    print(
-                        f"A position or open order already exists for {symbol} that would violate the risk parameters "
-                        f"with the new order.")
+            if symbol in self.crypto_symbols:
+                print(self.crypto_symbols)
+
+                crypto_equity = self.get_crypto_equity()
+
+                if (crypto_equity + proposed_trade_value) > self.risk_params['max_crypto_equity']:
+                    print("Proposed trade exceeds max crypto equity")
+                    return False
+
+            else:
+
+                if (portfolio_value + proposed_trade_value) > self.risk_params['max_portfolio_size']:
+                    print("Proposed trade exceeds max portfolio size")
                     return False
 
                 if qty > self.risk_params['max_position_size']:
-                    print(f"Buy order for {qty} shares of {symbol} exceeds maximum position size.")
+                    print("Proposed trade exceeds max position size")
                     return False
 
-                if (portfolio_value + proposed_trade_value) > self.risk_params['max_portfolio_size']:
-                    print(f"Buy order for {qty} shares of {symbol} exceeds maximum portfolio size.")
+            if order_type == 'buy':
+
+                if qty > self.risk_params['max_position_size']:
+                    print("Buy exceeds max position size")
                     return False
-
-                if symbol.startswith('C:'):
-                    # Ensure the proposed trade doesn't violate the max_crypto_equity limit
-                    if (crypto_equity + proposed_trade_value) > self.risk_params['max_crypto_equity']:
-                        print(f"Proposed trade for {qty} shares of {symbol} exceeds maximum crypto equity.")
-                        return False
-
-                # Ensure the proposed trade doesn't violate the max_risk_per_trade limit
-                equity = self.get_equity()
-                if equity == 0 or (proposed_trade_value / equity) <= self.risk_params['max_risk_per_trade']:
-                    pass
-                else:
-                    print(f"Proposed trade for {qty} shares of {symbol} exceeds maximum risk per trade.")
-                    return False
-
 
 
             elif order_type == 'sell':
 
-                position_list = [position for position in portfolio if position.symbol == symbol]
+                position = self.get_position(symbol)
 
-                if len(position_list) == 0:
+                position_qty = float(position['qty'])  # Convert to float
 
-                    print(f"Sell order for {symbol} can't be placed because the position doesn't exist.")
+                if qty > position_qty:  # Now the comparison should work
+
+                    print("Sell quantity exceeds position size")
 
                     return False
 
-                else:
-
-                    position = position_list[0]
-
-                    if float(position.qty) < qty:
-                        print(f"Sell quantity {qty} exceeds position size {position.qty}")
-                        return False
-
-                    # Added check for fractional quantities
-                    if isinstance(qty, float) and float(position.qty) < qty:
-                        print(f"Fractional quantity {qty} validated")
-
-                        print(
-
-                            f"Sell order for {qty} shares of {symbol} can't be placed because it exceeds the existing "
-
-                            f"position size.")
-
-                        return False
-
             return True
 
-        # error handling
         except Exception as e:
-            print(f"An exception occurred while validating trade for {symbol}: {str(e)}")
+            print(f"Error validating trade: {e}")
             return False
+
 
     def monitor_account_status(self):
         # Monitor and report on account status
@@ -414,32 +353,26 @@ class RiskManagement:
         """
         Check the risk parameters before placing an order.
 
-        The function will prevent an order if the new shares would result in buying power
-        falling below a certain threshold (in this case, 10% of the account equity).
+        The function will prevent an order if the new shares would result in a position size
+        that violates the risk parameters.
         """
-        # Calculate the cost of the new shares
-        new_shares_cost = float(new_shares) * self.get_current_price(symbol)
+        # Get the current position
+        try:
+            current_position = self.api.get_position(symbol)
+            current_shares = float(current_position.qty)
+        except:
+            current_shares = 0
 
-        # Calculate the buying power threshold, which is 10% of the account equity
-        buying_power_threshold = 0.1 * float(self.api.get_account().equity)
+        # Calculate the new quantity of shares after the purchase
+        total_shares = current_shares + float(new_shares)
 
-        # Check if the cost of the new shares is more than the buying power or if it violates the buying power threshold
-        if (self.api.get_account().cash - new_shares_cost) < buying_power_threshold:
-            # If the new cash balance after buying shares is less than the buying power threshold, prevent the order
+        # Check if the new quantity violates the risk parameters
+        if total_shares > self.risk_params['max_position_size']:
+            # If the new quantity violates the max position size, prevent the order
             return False
         else:
-            # Get the current position
-            try:
-                current_position = self.api.get_position(symbol)
-                current_shares = float(current_position.qty)
-            except:
-                current_shares = 0
-
-            # Calculate the new quantity of shares after the purchase
-            total_shares = current_shares + float(new_shares)
-
-            # If the new quantity doesn't violate the buying power and cash reserve, adjust the quantity and place the order
-            delta_shares = buying_power_threshold - current_shares
+            # If the new quantity doesn't violate the risk parameters, adjust the quantity and place the order
+            delta_shares = self.risk_params['max_position_size'] - current_shares
 
             if delta_shares > 0:
                 # Get the average entry price
@@ -788,8 +721,6 @@ if __name__ == "__main__":
 
     risk_manager.rebalance_positions()
 
-    risk_manager.check_position_losses()
-
     account = risk_manager.api.get_account()
     portfolio = risk_manager.api.list_positions()
 
@@ -812,12 +743,15 @@ if __name__ == "__main__":
         else:
             current_price = float(api.get_latest_bar(symbol).c)
 
-        average_entry_price = round(average_entry_price, 2)
+        average_entry_price = float(position.avg_entry_price)
+
+        # Check if average entry price is zero and skip to the next iteration if so
+        if average_entry_price == 0:
+            print(f"Warning: Average Entry Price for {symbol} is zero. Skipping this symbol.")
+            continue
+
         current_price = round(current_price, 2)
-        if average_entry_price != 0:
-            profitability = round((current_price - average_entry_price) / average_entry_price * 100, 2)
-        else:
-            profitability = 1
+        profitability = (current_price - float(position.avg_entry_price)) / float(position.avg_entry_price) * 100
 
         print(
             f"Symbol: {symbol}, Average Entry Price: {average_entry_price}, Current Price: {current_price}, "
