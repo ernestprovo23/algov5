@@ -10,7 +10,6 @@ from trade_stats import record_trade
 logging.basicConfig(filename='master_script.log', level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
 
 
-
 def get_files_in_current_directory():
     return [f for f in os.listdir() if os.path.isfile(f)]
 
@@ -21,16 +20,69 @@ def get_symbol(row):
     symbol = f"{crypto}{quote}"  # Combine Crypto and Quote to get the symbol
     return symbol if symbol != 'nannan' else None
 
+def calculate_SMA(data, window=5):
+    return data['Close'].rolling(window=window).mean()
+
+
+def calculate_EMA(data, window=5):
+    return data['Close'].ewm(span=window, adjust=False).mean()
+
+
+def calculate_RSI(data, window=14):
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).fillna(0)
+    loss = (-delta.where(delta < 0, 0)).fillna(0)
+
+    avg_gain = gain.rolling(window=window).mean()
+    avg_loss = loss.rolling(window=window).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+
+def calculate_MACD(data, short_window=12, long_window=26, signal_window=9):
+    ema_short = calculate_EMA(data, window=short_window)
+    ema_long = calculate_EMA(data, window=long_window)
+    macd_line = ema_short - ema_long
+    signal_line = macd_line.ewm(span=signal_window, adjust=False).mean()
+    return macd_line, signal_line
+
+
+def analyze_trend(short_term_SMA, long_term_SMA):
+    return short_term_SMA > long_term_SMA
+
+
+def price_near_support(data):
+    # Logic to find if price is near support level
+    pass
+
+
+def price_near_resistance(data):
+    # Logic to find if price is near resistance level
+    pass
+
 
 def process_buy(api, data, row, risk_management, teams_url, manager):
     symbol = get_symbol(row)
+    print('processing buy')
     if symbol is None:
         return
 
     # Get the last row for the symbol
     row = data[data['Symbol'] == symbol].iloc[-1]
 
-    signal = row["Signal"]
+    # Calculate Indicators
+    short_term_SMA = calculate_SMA(data, window=5)
+    long_term_SMA = calculate_SMA(data, window=10)
+    rsi = calculate_RSI(data)
+    macd_line, signal_line = calculate_MACD(data)
+
+    # Analyzing trend (upward or downward)
+    upward_trend = analyze_trend(short_term_SMA.iloc[-1], long_term_SMA.iloc[-1])
+
+    signal = row["Buy Signal"]
     date = row["Date"]
     momentum_signal = row["Momentum Signal"]
 
@@ -44,7 +96,9 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
     if pd.isnull(signal) or signal != "Buy":
         return
 
-    logging.info(f"Buy signal detected for {symbol}")
+    # Additional Buy Logic based on calculated indicators
+    if upward_trend and rsi.iloc[-1] < 70:  # Add any other conditions if needed
+        logging.info(f"Buy conditions met for {symbol}")
 
     # Get the average entry price for the symbol
     avg_entry_price = risk_management.get_avg_entry_price(symbol)
@@ -101,7 +155,7 @@ def process_sell(api, data, row, risk_management, teams_url, manager):
     # Get the last row for the symbol
     row = data[data['Symbol'] == symbol].iloc[-1]
 
-    signal = row["Signal"]
+    signal = row["Buy Signal"]
     date = row["Date"]
 
     if pd.isnull(signal) or signal != "Sell":
@@ -109,7 +163,7 @@ def process_sell(api, data, row, risk_management, teams_url, manager):
 
     try:
         # Get current position
-        position = api.get_position(symbol)
+        position = api.list_positions(symbol)
 
         # Get the quantity currently held for selling
         if isinstance(position.qty, str):
@@ -214,4 +268,8 @@ def process_signals():
 
 
 if __name__ == "__main__":
+    print('script started')
+
     process_signals()
+
+    print('script ended')
