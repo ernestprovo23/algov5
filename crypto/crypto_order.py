@@ -66,7 +66,7 @@ def price_near_resistance(data):
 
 def process_buy(api, data, row, risk_management, teams_url, manager):
     symbol = get_symbol(row)
-    print('processing buy')
+
     if symbol is None:
         return
 
