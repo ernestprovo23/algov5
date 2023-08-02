@@ -814,7 +814,10 @@ if __name__ == "__main__":
 
         average_entry_price = round(average_entry_price, 2)
         current_price = round(current_price, 2)
-        profitability = round((current_price - average_entry_price) / average_entry_price * 100, 2)
+        if average_entry_price != 0:
+            profitability = round((current_price - average_entry_price) / average_entry_price * 100, 2)
+        else:
+            profitability = 1
 
         print(
             f"Symbol: {symbol}, Average Entry Price: {average_entry_price}, Current Price: {current_price}, "
