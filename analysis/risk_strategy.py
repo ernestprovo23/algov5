@@ -6,7 +6,9 @@ from trade_stats import download_trades
 from alpha_vantage.timeseries import TimeSeries
 from alpha_vantage.cryptocurrencies import CryptoCurrencies
 import time
+from datetime import datetime
 import os
+from port_op import optimize_portfolio
 
 alpha_vantage_ts = TimeSeries(key=ALPHA_VANTAGE_API, output_format='pandas')
 alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
@@ -17,7 +19,10 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.2
+max_crypto_equity = equity * 0.50
+
+# Maximum amount of equity that can be held in commodities
+max_commodity_equity = equity * 0.50
 
 # read the risk_params in and use the values
 # these are updated by the algorithm below by pnl
@@ -99,58 +104,99 @@ class RiskManagement:
         # Initialize self.peak_portfolio_value with the current cash value
         self.peak_portfolio_value = float(account.cash)
 
+
+    def get_commodity_equity(self):
+        # Get account info
+        account = self.api.get_account()
+        equity = float(account.equity)
+
+        # Maximum amount of equity that can be held in commodities
+        max_commodity_equity = equity * 0.50  # Adjust the percentage as per your strategy
+
+        return max_commodity_equity
+
+
+    def optimize_portfolio(self):
+        # Get historical data for each symbol
+        historical_data = {}
+        for symbol in self.crypto_symbols:
+            data, _ = alpha_vantage_crypto.get_digital_currency_daily(symbol=symbol, market='USD')
+            historical_data[symbol] = data['4b. close (USD)']
+
+        # Calculate expected returns and covariance matrix
+        returns_data = pd.DataFrame(historical_data).pct_change()
+        expected_returns = returns_data.mean()
+        covariance_matrix = returns_data.cov()
+
+        # Total investment amount
+        total_investment = max_crypto_equity
+
+        # Run optimization in separate script
+        quantities_to_purchase = optimize_portfolio(expected_returns, covariance_matrix, risk_aversion,
+                                                    total_investment)
+
+        return quantities_to_purchase
+
+    from datetime import datetime
+
     def rebalance_positions(self):
         account = self.api.get_account()
         equity = float(account.equity)
         positions = self.api.list_positions()
 
-        # Calculating the overall portfolio value
-        portfolio_value = sum([float(position.current_price) * float(position.qty) for position in positions])
+        crypto_value = 0
+        commodity_value = 0
 
-        # Loop through positions and analyze each one
+        # Calculating the overall portfolio value and separate values for crypto and commodities
         for position in positions:
             symbol = position.symbol
-            qty = float(position.qty)
             current_price = float(position.current_price)
-            position_value = qty * current_price
+            position_value = float(position.qty) * current_price
 
-            # Check if this position's symbol ends with USD; if not, adjust logic accordingly
-            if symbol.endswith("USD"):
-                base_currency = symbol[:-3]
-                quote_currency = "USD"
-                closing_price = get_alpha_vantage_data(base_currency, quote_currency)
-            else:
-                closing_price = float(api.get_latest_bar(symbol).c)
+            if symbol in self.crypto_symbols:
+                crypto_value += position_value
+            else:  # Assuming other symbols are commodities
+                commodity_value += position_value
 
-            if closing_price is None:
-                print(f"Error getting closing price for {symbol}. Skipping...")
-                continue
+        # Check if crypto or commodity positions exceed 50% of total equity
+        if crypto_value > 0.5 * equity or commodity_value > 0.5 * equity:
+            print("Rebalancing positions as crypto or commodity exceeds 50% of equity.")
 
-            # Calculating profitability
-            profitability = (current_price - float(position.avg_entry_price)) / float(position.avg_entry_price) * 100
-            print(symbol, profitability)
+            # Get today's date
+            current_date = datetime.now().date()
 
-            # Check if profitability is below the threshold
-            if profitability < -2.3:
-                # Check relative weight of this asset in the portfolio
-                relative_weight = position_value / portfolio_value
+            # Get all activities of type 'FILL' that occurred today
+            activities = self.api.get_activities()
+            fill_activities = [activity for activity in activities if
+                               activity.activity_type == 'FILL' and activity.transaction_time.to_pydatetime().date() == current_date]
 
-                # You may introduce additional logic to determine the sell quantity and limit price
-                shares_to_sell = int(qty * 0.35)  # Example: selling 35% of holdings
-                price_at_which_to_sell = current_price * 0.99  # setting a limit price 1% below current price
+            # Loop through positions and analyze each one to rebalance
+            for position in positions:
+                symbol = position.symbol
+                qty = float(position.qty)
+                current_price = float(position.current_price)
 
-                # Only selling if the asset's relative weight in the portfolio is above a certain threshold
-                if relative_weight > 0.0123:  # Example: 1.23%
-                    print(
-                        f"Trying to sell {shares_to_sell} shares of {symbol}. Profitability: {profitability}%, Relative Weight: {relative_weight}")
+                # Check if this position's symbol is a crypto or commodity and act accordingly
+                if (symbol in self.crypto_symbols and crypto_value > 0.5 * equity) or (
+                        symbol not in self.crypto_symbols and commodity_value > 0.5 * equity):
 
-                    dollar_amount_to_sell = shares_to_sell * current_price
-                    if dollar_amount_to_sell > 0:
-                        qty_to_sell = int(dollar_amount_to_sell / current_price)
+                    # Check if account equity is less than 25k
+                    if equity < 25000:
+                        # Check if this symbol was bought today
+                        if any(activity.symbol == symbol and activity.side == 'buy' for activity in fill_activities):
+                            print(f"Cannot sell {symbol} as it was bought today and equity is less than 25k.")
+                            continue
 
-                        api.submit_order(
+                    shares_to_sell = int(qty * 0.35)  # Example: selling 35% of holdings
+                    price_at_which_to_sell = current_price * 0.99  # Setting a limit price 1% below current price
+                    price_at_which_to_sell = round(price_at_which_to_sell, 2)
+
+                    print(f"Trying to sell {shares_to_sell} shares of {symbol}.")
+
+                    if shares_to_sell > 0:
+                        self.api.submit_order(
                             symbol=symbol,
-                            qty=qty_to_sell,
+                            qty=shares_to_sell,
                             side='sell',
                             type='limit',
                             limit_price=price_at_which_to_sell,
@@ -212,30 +258,29 @@ class RiskManagement:
             open_symbols = [o.symbol for o in open_orders]
             print(f"Open order symbols: {open_symbols}")
 
-            account_cash = float(self.api.get_account().cash)
-            print(f"Account cash: {account_cash}")
+            account_cash = float(self.api.get_account().equity)
+            print(f"Account equity: {account_cash}")
 
-            if proposed_trade_value > account_cash * 0.45:
-                print("Proposed trade exceeds 20% of account cash")
+            if proposed_trade_value > account_cash:
+                print("Proposed trade exceeds cash available to purchase crypto. ")
                 return False
 
             if symbol in self.crypto_symbols:
+
+                if (crypto_equity + proposed_trade_value) > max_crypto_equity:
+                    return False
+
+            else:
+
+                if (commodity_equity + proposed_trade_value) > max_commodity_equity:
+                    return False
+
                 print(self.crypto_symbols)
 
                 crypto_equity = self.get_crypto_equity()
 
                 if (crypto_equity + proposed_trade_value) > self.risk_params['max_crypto_equity']:
                     print("Proposed trade exceeds max crypto equity")
-                    return False
-
-            else:
-
-                if (portfolio_value + proposed_trade_value) > self.risk_params['max_portfolio_size']:
-                    print("Proposed trade exceeds max portfolio size")
-                    return False
-
-                if qty > self.risk_params['max_position_size']:
-                    print("Proposed trade exceeds max position size")
                     return False
 
             if order_type == 'buy':
@@ -320,8 +365,8 @@ class RiskManagement:
             self.risk_params['max_portfolio_size'] *= 0.96  # reduce by 4%
         elif pnl >= 110:
             print("PnL is positive, increasing risk parameters...")
-            self.risk_params['max_position_size'] *= 1.10  # increase by 10%
-            self.risk_params['max_portfolio_size'] *= 1.1065  # increase by 10%
+            self.risk_params['max_position_size'] *= 1.0032  # increase by 10%
+            self.risk_params['max_portfolio_size'] *= 1.0032  # increase by 10%
         else:
             print("PnL is neutral, no changes to risk parameters.")
         with open('risk_params.json', 'w') as f:
@@ -462,10 +507,25 @@ class RiskManagement:
                 print(momentum.index)
                 return None  # or some appropriate fallback value
 
+
     def calculate_quantity(self, symbol):
         """
         Calculates the quantity to purchase based on available equity and current price.
         """
+        # Get account info
+        account = self.api.get_account()
+        available_cash = float(account.cash)
+        equity = float(account.equity)
+
+        # Determine how much of the equity can be invested
+        max_crypto_equity = equity * 0.85  # You should define this within the method
+        investable_amount = min(available_cash, max_crypto_equity)
+
+        # Check if investable amount is less than 1
+        if investable_amount < 1:
+            print(f"Investable amount for {symbol} is less than 1. Returning quantity 0.")
+            return 0
+
         # Use the current price
         current_price = self.get_current_price(symbol)
 
@@ -473,14 +533,20 @@ class RiskManagement:
             print(f"Current price for {symbol} is zero or None. Returning quantity 0.")
             return 0
 
-        # Calculate a preliminary quantity based on the max_position_size parameter
-        preliminary_quantity = self.risk_params['max_position_size'] / current_price
+        # Calculate a preliminary quantity based on the available cash
+        preliminary_quantity = investable_amount / current_price
 
         # Tiered system for quantity adjustment
-        if current_price > 10000:  # High priced assets like BTC
-            quantity = preliminary_quantity * 0.1  # buy less of high priced assets
-        elif 1000 < current_price <= 10000:  # Mid-priced assets
-            quantity = preliminary_quantity * 0.5  # buy moderate quantity
+        if current_price > 4001:  # High priced assets like BTC
+            quantity = preliminary_quantity * 0.01  # buy less of high priced assets
+        elif 3001 < current_price <= 4000:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.0234
+        elif 1000 < current_price <= 3000:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.0334
+        elif 100 < current_price <= 999:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.04534
+        elif 1 < current_price <= 99:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.07434
         else:  # Low-priced assets
             quantity = preliminary_quantity  # buy more of low priced assets
 
