@@ -7,6 +7,7 @@ from alpha_vantage.timeseries import TimeSeries
 from alpha_vantage.cryptocurrencies import CryptoCurrencies
 import time
 import os
+from port_op import optimize_portfolio
 
 alpha_vantage_ts = TimeSeries(key=ALPHA_VANTAGE_API, output_format='pandas')
 alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
@@ -17,7 +18,7 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.2
+max_crypto_equity = equity * 0.88
 
 # read the risk_params in and use the values
 # these are updated by the algorithm below by pnl
@@ -98,6 +99,28 @@ class RiskManagement:
 
         # Initialize self.peak_portfolio_value with the current cash value
         self.peak_portfolio_value = float(account.cash)
+
+    def optimize_portfolio(self):
+        # Get historical data for each symbol
+        historical_data = {}
+        for symbol in self.crypto_symbols:
+            data, _ = alpha_vantage_crypto.get_digital_currency_daily(symbol=symbol, market='USD')
+            historical_data[symbol] = data['4b. close (USD)']
+
+        # Calculate expected returns and covariance matrix
+        returns_data = pd.DataFrame(historical_data).pct_change()
+        expected_returns = returns_data.mean()
+        covariance_matrix = returns_data.cov()
+
+        # Total investment amount
+        total_investment = max_crypto_equity
+
+        # Run optimization in separate script
+        quantities_to_purchase = optimize_portfolio(expected_returns, covariance_matrix, risk_aversion,
+                                                    total_investment)
+
+        return quantities_to_purchase
+
 
     def rebalance_positions(self):
         account = self.api.get_account()
@@ -212,11 +235,11 @@ class RiskManagement:
             open_symbols = [o.symbol for o in open_orders]
             print(f"Open order symbols: {open_symbols}")
 
-            account_cash = float(self.api.get_account().cash)
-            print(f"Account cash: {account_cash}")
+            account_cash = float(self.api.get_account().equity)
+            print(f"Account equity: {account_cash}")
 
-            if proposed_trade_value > account_cash * 0.45:
-                print("Proposed trade exceeds 20% of account cash")
+            if proposed_trade_value > account_cash:
+                print("Proposed trade exceeds cash available to purchase crypto. ")
                 return False
 
             if symbol in self.crypto_symbols:
@@ -320,8 +343,8 @@ class RiskManagement:
             self.risk_params['max_portfolio_size'] *= 0.96  # reduce by 4%
         elif pnl >= 110:
             print("PnL is positive, increasing risk parameters...")
-            self.risk_params['max_position_size'] *= 1.10  # increase by 10%
-            self.risk_params['max_portfolio_size'] *= 1.1065  # increase by 10%
+            self.risk_params['max_position_size'] *= 1.0032  # increase by 10%
+            self.risk_params['max_portfolio_size'] *= 1.0032  # increase by 10%
         else:
             print("PnL is neutral, no changes to risk parameters.")
         with open('risk_params.json', 'w') as f:
@@ -462,10 +485,25 @@ class RiskManagement:
                 print(momentum.index)
                 return None  # or some appropriate fallback value
 
+
     def calculate_quantity(self, symbol):
         """
         Calculates the quantity to purchase based on available equity and current price.
         """
+        # Get account info
+        account = self.api.get_account()
+        available_cash = float(account.cash)
+        equity = float(account.equity)
+
+        # Determine how much of the equity can be invested
+        max_crypto_equity = equity * 0.85  # You should define this within the method
+        investable_amount = min(available_cash, max_crypto_equity)
+
+        # Check if investable amount is less than 1
+        if investable_amount < 1:
+            print(f"Investable amount for {symbol} is less than 1. Returning quantity 0.")
+            return 0
+
         # Use the current price
         current_price = self.get_current_price(symbol)
 
@@ -473,14 +511,20 @@ class RiskManagement:
             print(f"Current price for {symbol} is zero or None. Returning quantity 0.")
             return 0
 
-        # Calculate a preliminary quantity based on the max_position_size parameter
-        preliminary_quantity = self.risk_params['max_position_size'] / current_price
+        # Calculate a preliminary quantity based on the available cash
+        preliminary_quantity = investable_amount / current_price
 
         # Tiered system for quantity adjustment
-        if current_price > 10000:  # High priced assets like BTC
-            quantity = preliminary_quantity * 0.1  # buy less of high priced assets
-        elif 1000 < current_price <= 10000:  # Mid-priced assets
-            quantity = preliminary_quantity * 0.5  # buy moderate quantity
+        if current_price > 4001:  # High priced assets like BTC
+            quantity = preliminary_quantity * 0.01  # buy less of high priced assets
+        elif 3001 < current_price <= 4000:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.0234
+        elif 1000 < current_price <= 3000:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.0334
+        elif 100 < current_price <= 999:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.04534
+        elif 1 < current_price <= 99:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.07434
         else:  # Low-priced assets
             quantity = preliminary_quantity  # buy more of low priced assets
 
