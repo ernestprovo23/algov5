@@ -214,7 +214,7 @@ def handle_symbol(symbol):
         recent_signal = float(macd_point['MACD_Signal'])
         recent_sma = float(sma_point['SMA'])
 
-        if recent_rsi <= 50.5:
+        if recent_rsi <= 70:
             print(f"{symbol}: RSI condition met. Current: {recent_rsi}")
         else:
             print(f"{symbol}: RSI condition not met. Current: {recent_rsi}")
@@ -230,7 +230,7 @@ def handle_symbol(symbol):
             print(f"{symbol}: SMA condition not met. Current: {recent_close} / {recent_sma}. ")
 
 
-        if recent_rsi <= 50.5 and recent_macd >= recent_signal and recent_close >= recent_sma:
+        if recent_rsi <= 70 and recent_macd >= recent_signal and recent_close >= recent_sma:
             # Calculate shares once here
             shares = int(risk_params['max_portfolio_size'] * risk_params['max_risk_per_trade']) / recent_close / 3
 
