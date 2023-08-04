@@ -54,16 +54,6 @@ def analyze_trend(short_term_SMA, long_term_SMA):
     return short_term_SMA > long_term_SMA
 
 
-def price_near_support(data):
-    # Logic to find if price is near support level
-    pass
-
-
-def price_near_resistance(data):
-    # Logic to find if price is near resistance level
-    pass
-
-
 def process_buy(api, data, row, risk_management, teams_url, manager):
     symbol = get_symbol(row)
 
@@ -82,13 +72,13 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
     # Analyzing trend (upward or downward)
     upward_trend = analyze_trend(short_term_SMA.iloc[-1], long_term_SMA.iloc[-1])
 
-    signal = row["Buy Signal"]
+    signal = row["Momentum Signal"]
     date = row["Date"]
     momentum_signal = row["Momentum Signal"]
 
     logging.info(
-        f"Processing symbol: {symbol}, Signal: {signal}, Momentum Signal: {momentum_signal}, Date Chose: {date}")
-    print(f"Processing symbol: {symbol}, Signal: {signal}, Momentum Signal: {momentum_signal}, Date Chose: {date}")
+        f"Processing symbol: {symbol}, Signal: {signal}, Date Chose: {date}")
+    print(f"Processing symbol: {symbol}, Signal: {signal}, Date Chose: {date}")
 
     # Sell the entire position if momentum is negative
     risk_management.check_momentum(symbol, momentum_signal)
@@ -97,11 +87,13 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
         return
 
     # Additional Buy Logic based on calculated indicators
-    if upward_trend and rsi.iloc[-1] < 70:  # Add any other conditions if needed
+    if upward_trend and rsi.iloc[-1] < 55:  # Add any other conditions if needed
         logging.info(f"Buy conditions met for {symbol}")
 
     # Get the average entry price for the symbol
     avg_entry_price = risk_management.get_avg_entry_price(symbol)
+    print(f'Your average entry price was: {avg_entry_price}')
+    entry_price = risk_management.get_current_price(symbol)
 
     if avg_entry_price is not None:
         logging.info(f"Average entry price for {symbol}: {avg_entry_price}")
@@ -155,7 +147,7 @@ def process_sell(api, data, row, risk_management, teams_url, manager):
     # Get the last row for the symbol
     row = data[data['Symbol'] == symbol].iloc[-1]
 
-    signal = row["Buy Signal"]
+    signal = row["Momentum Signal"]
     date = row["Date"]
 
     if pd.isnull(signal) or signal != "Sell":
