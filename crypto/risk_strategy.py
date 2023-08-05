@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 import os
 from port_op import optimize_portfolio
+import logging
 
 alpha_vantage_ts = TimeSeries(key=ALPHA_VANTAGE_API, output_format='pandas')
 alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
@@ -19,10 +20,10 @@ account = api.get_account()
 equity = float(account.equity)
 
 # Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.50
+max_crypto_equity = equity * 0.45
 
 # Maximum amount of equity that can be held in commodities
-max_commodity_equity = equity * 0.50
+max_commodity_equity = equity * 0.45
 
 # read the risk_params in and use the values
 # these are updated by the algorithm below by pnl
@@ -38,8 +39,8 @@ class CryptoAsset:
         self.quantity = quantity
         self.value_usd = value_usd
         self.value_24h_ago = None  # to store the value 24 hours ago
-        self.crypto_symbols = ['AAVE/USD', 'ALGO/USD', 'AVAX/USD', 'BCH/USD', 'BTC/USD', 'ETH/USD',
-                  'LINK/USD', 'LTC/USD', 'TRX/USD', 'UNI/USD']
+        self.crypto_symbols = ['AAVE/USD', 'AVAX/USD', 'BCH/USD', 'BTC/USD', 'ETH/USD',
+                  'LINK/USD', 'LTC/USD', 'TRX/USD', 'UNI/USD', 'SHIB/USD']
 
     def profit_loss_24h(self):
         if self.value_24h_ago is not None:
@@ -104,17 +105,38 @@ class RiskManagement:
         # Initialize self.peak_portfolio_value with the current cash value
         self.peak_portfolio_value = float(account.cash)
 
+    def update_max_crypto_equity(self):
+        # Get the current buying power of the account
+        account = self.api.get_account()
+        buying_power = float(account.buying_power)
+
+        # Compute max_crypto_equity
+        max_crypto_equity = buying_power * 0.45
+
+        # Update the JSON file with the new value
+        self.risk_params['max_crypto_equity'] = max_crypto_equity
+        with open('risk_params.json', 'w') as f:
+            json.dump(self.risk_params, f, indent=4)
+
+        print(f"Updated max_crypto_equity: {max_crypto_equity}")
+        return max_crypto_equity
 
     def get_commodity_equity(self):
-        # Get account info
-        account = self.api.get_account()
-        equity = float(account.equity)
-
-        # Maximum amount of equity that can be held in commodities
+        equity = float(self.api.get_account().equity)
         max_commodity_equity = equity * 0.50  # Adjust the percentage as per your strategy
-
         return max_commodity_equity
 
+
+    def get_crypto_equity(self):
+        equity = float(self.api.get_account().equity)
+        max_crypto_equity = equity * 0.50  # Adjust the percentage as per your strategy
+        return max_crypto_equity
+
+
+    def max_commodity_equity(self):
+        equity = float(self.api.get_account().equity)
+        max_equity = equity * 0.50  # or whatever percentage
+        return max_equity
 
     def optimize_portfolio(self):
         # Get historical data for each symbol
@@ -136,8 +158,6 @@ class RiskManagement:
                                                     total_investment)
 
         return quantities_to_purchase
-
-    from datetime import datetime
 
     def rebalance_positions(self):
         account = self.api.get_account()
@@ -226,53 +246,69 @@ class RiskManagement:
 
         return pos
 
-
     def validate_trade(self, symbol, qty, order_type):
 
         try:
             qty = float(qty)
 
-            print(f"Validating trade for {symbol}...")
+            print(f"Running validation logic against trade for {symbol}...")
 
             portfolio = self.api.list_positions()
-            portfolio_symbols = [p.symbol for p in portfolio]
-            print(f"Current portfolio symbols: {portfolio_symbols}")
 
             portfolio_value = sum([float(p.current_price) * float(p.qty) for p in portfolio])
-            print(f"Current portfolio value: {portfolio_value}")
+            print(f"Current portfolio value (market value of all positions): {portfolio_value}")
 
+            print('##################################################################')
+            print('##################################################################')
+            print('##################################################################')
+
+            print('retreiving the price details from the get_current_price method....')
+
+            # get the current price from the get_current_price method
             current_price = self.get_current_price(symbol)
 
-            if current_price is None:
-                raise Exception(f"Could not get current price for {symbol}")
+            print(f"Current Alpaca API price for {symbol} is: {current_price}")
 
-            print(f"Current price for {symbol}: {current_price}")
-
-            print(f"Quantity: {qty}")
-            print(f"Current Price: {current_price}")
-
+            # get the proposed trade value from the new trade being run using current price * qty
             proposed_trade_value = current_price * qty
-            print(f"Proposed trade value: {proposed_trade_value}")
+            print(f"Total proposed shares to purchase: {proposed_trade_value}")
 
+            # get the list of open orders
             open_orders = self.api.list_orders(status='open')
             open_symbols = [o.symbol for o in open_orders]
-            print(f"Open order symbols: {open_symbols}")
 
-            account_cash = float(self.api.get_account().equity)
-            print(f"Account equity: {account_cash}")
+            # current account cash (for crypto spending)
+            account_cash = float(self.api.get_account().cash)
+            print(f"Current account cash to buy: {account_cash}")
 
+            print('##################################################################')
+            print('##################################################################')
+            print('##################################################################')
+
+            print('processing propsed_trade_value logic against current cash holdings...')
+
+            # check if proposed new value is more than current account cash holdings - if so, reject it
             if proposed_trade_value > account_cash:
-                print("Proposed trade exceeds cash available to purchase crypto. ")
+                print("Proposed trade exceeds cash available to purchase crypto.")
                 return False
 
+            # crypto specific - check if proposed new value is more than current account cash holdings - if so, reject it
             if symbol in self.crypto_symbols:
-
-                if (crypto_equity + proposed_trade_value) > max_crypto_equity:
+                crypto_equity = self.get_crypto_equity()
+                print(crypto_equity)
+                if float(crypto_equity + proposed_trade_value) > self.max_crypto_equity:
+                    print(f'New Crypto Equity for this trade would be: {max_crypto_equity}')
+                    print("Proposed trade exceeds max crypto equity limit.")
                     return False
-
             else:
+                commodity_equity = self.get_commodity_equity()
+                updated_max_crypto_equity = self.update_max_crypto_equity()
+                print(f'Here is the commodity equity after purchase: {commodity_equity}')
+                print(f'Here is the maximum commodity equity after purchase: {updated_max_crypto_equity}')
+                print(f'Here is the proposed traade value after analysis: {proposed_trade_value}')
 
-                if (commodity_equity + proposed_trade_value) > max_commodity_equity:
+                if (commodity_equity + proposed_trade_value) > updated_max_crypto_equity:
+                    print("Proposed trade exceeds max commodity equity limit.")
                     return False
 
                 print(self.crypto_symbols)
@@ -518,7 +554,7 @@ class RiskManagement:
         equity = float(account.equity)
 
         # Determine how much of the equity can be invested
-        max_crypto_equity = equity * 0.85  # You should define this within the method
+        max_crypto_equity = equity * 0.45  # You should define this within the method
         investable_amount = min(available_cash, max_crypto_equity)
 
         # Check if investable amount is less than 1
@@ -530,7 +566,6 @@ class RiskManagement:
         current_price = self.get_current_price(symbol)
 
         if current_price == 0 or current_price is None:
-            print(f"Current price for {symbol} is zero or None. Returning quantity 0.")
             return 0
 
         # Calculate a preliminary quantity based on the available cash
@@ -547,8 +582,12 @@ class RiskManagement:
             quantity = preliminary_quantity * 0.04534
         elif 1 < current_price <= 99:  # Mid-priced assets
             quantity = preliminary_quantity * 0.07434
+        elif 0.10 < current_price <= .99:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.011434
         else:  # Low-priced assets
             quantity = preliminary_quantity  # buy more of low priced assets
+
+        quantity = round(quantity, 5)
 
         print(f"Calculated quantity for {symbol}: {quantity}")
         return quantity
@@ -714,33 +753,49 @@ class RiskManagement:
             print(f"No position in {symbol} to calculate average entry price. Error: {str(e)}")
             return 0
 
-    def get_current_price(self, symbol, market="USD"):
-        try:
-            if '/' in symbol:  # For cryptocurrencies
-                source, quote = symbol.split('/')
-                if quote == market:
-                    url = f"https://www.alphavantage.co/query?function=CRYPTO_INTRADAY&symbol={source}&market={market}&interval=5min&outputsize=full&apikey={ALPHA_VANTAGE_API}"
-                    data_field = 'Time Series Crypto (5min)'
-                else:
-                    return None  # We can't fetch price for this market
-            else:  # For non-crypto
-                url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={ALPHA_VANTAGE_API}"
-                data_field = 'Time Series (Daily)'
 
+    def get_current_price(self, symbol, ALPHA_VANTAGE_API=None):
+        print(f'Current Price Lookup for : {symbol}')
+
+        try:
+            # Attempt to fetch price from Alpha Vantage
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={ALPHA_VANTAGE_API}"
             response = requests.get(url)
             data = response.json()
 
-            last_update = list(data[data_field].keys())[0]
-            current_price = float(data[data_field][last_update]['4. close'])
+            last_update = list(data['Time Series (Daily)'].keys())[0]
+            current_price_str = data['Time Series (Daily)'][last_update]['4. close']
+            current_price = float(current_price_str)
 
-            print(f"Current price for {symbol} is {current_price} at {last_update}.")
-
-            time.sleep(0.5)  # delay to respect API limit, adjust as necessary
-
+            print(
+                f"Current price for {symbol} is {current_price} (string value: {current_price_str}) at {last_update}.")
             return current_price
         except Exception as e:
-            print(f"Failed to get current price for {symbol}. Error: {str(e)}")
-            return None
+            pass
+
+        # If Alpha Vantage fails, attempt to fetch price from Alpaca
+        if symbol.endswith("USD"):
+            crypto, sort = symbol[:-3], "USD"
+            alpaca_symbol = f"{crypto}/{sort}"
+
+            try:
+                print(f"Fetching price from Alpaca API for {symbol}.")
+                url = f"https://data.alpaca.markets/v1beta3/crypto/us/latest/bars?symbols={alpaca_symbol}"
+                headers = {"accept": "application/json"}
+                response = requests.get(url, headers=headers)
+
+                if response.status_code != 200:
+                    print(f"Connection failure {symbol} from Alpaca. Status code: {response.status_code}")
+                    return None
+
+                crypto_data = response.json()
+                current_price = float(crypto_data['bars'][alpaca_symbol]['c'])
+
+                print(f"Current price for {symbol} is {current_price}.")
+                return current_price
+            except Exception as e:
+                print(f"Failed to get current price from Alpaca or Alpha Vantage for {symbol}. Error: {str(e)}")
+                return None
 
 
 def get_alpha_vantage_data(base_currency, quote_currency):
@@ -789,6 +844,18 @@ if __name__ == "__main__":
 
     account = risk_manager.api.get_account()
     portfolio = risk_manager.api.list_positions()
+
+    commodity_equity = risk_manager.get_commodity_equity()
+    crypto_equity = risk_manager.get_crypto_equity()
+    max_commodity_equity = risk_manager.max_commodity_equity()
+
+    print(f"Commodity Equity: {commodity_equity}")
+    print(f"Crypto Equity: {crypto_equity}")
+
+    # Call the new method to update max_crypto_equity
+    updated_max_crypto_equity = risk_manager.update_max_crypto_equity()
+    print(f"Updated max_crypto_equity value is: {updated_max_crypto_equity}")
+
 
     portfolio_summary = {}
     portfolio_summary['equity'] = float(account.equity)

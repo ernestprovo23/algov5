@@ -95,48 +95,53 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
     print(f'Your average entry price was: {avg_entry_price}')
     entry_price = risk_management.get_current_price(symbol)
 
-    if avg_entry_price is not None:
-        logging.info(f"Average entry price for {symbol}: {avg_entry_price}")
+    logging.info(f"Average entry price for {symbol}: {avg_entry_price}")
 
-        # Calculate the quantity to buy based on average entry price and available equity
-        quantity = risk_management.calculate_quantity(symbol)
+    # Calculate the quantity to buy based on average entry price and available equity
+    quantity = risk_management.calculate_quantity(symbol)
 
-        logging.info(f"Calculated quantity to buy: {quantity}")
+    logging.info(f"Calculated quantity to buy: {quantity}")
 
-        # Validate the trade
-        if risk_management.validate_trade(symbol, quantity, "buy"):
-            logging.info(f"Buy order validated for {symbol}")
-            print(f"Buy order validated for {symbol}")
+    # Validate the trade
+    if risk_management.validate_trade(symbol, quantity, "buy"):
+        logging.info(f"Buy order validated for {symbol}")
+        print(f"Buy order validated for {symbol}")
 
-            if quantity > 0:
-                try:
-                    # Place a market buy order
-                    api.submit_order(
-                        symbol=symbol,
-                        qty=quantity,
-                        side='buy',
-                        type='market',
-                        time_in_force='gtc'
-                    )
-                    manager.add_asset(symbol, quantity, avg_entry_price * quantity)
-                    manager.increment_operations()  # increment the number of operations
-                except Exception as e:
-                    logging.error(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
-                    print(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
-                    return
+        if quantity > 0:
+            # Define order details
+            order_details = {
+                'symbol': symbol,
+                'qty': quantity,
+                'side': 'buy',
+                'type': 'market',
+                'time_in_force': 'gtc'
+            }
 
-                logging.info(f'Buy order placed for {quantity} units of {symbol}')
-                # Send a message to the team
-                send_teams_message(teams_url, {"text": f"Placed a BUY order for {quantity} units of {symbol}"})
+            # Print and inspect the order details
+            print(f"Order details before submitting: {order_details}")
 
-                # Record the trade
-                record_trade(symbol, 'buy', quantity, date)
-            else:
-                logging.info(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
+            try:
+                # Place a market buy order
+                api.submit_order(**order_details)
+                print(api.submit_order(**order_details))
+                logging.info(f'Buy order placed for {quantity} units of {symbol}.')
+                manager.add_asset(symbol, quantity, avg_entry_price * quantity)
+                manager.increment_operations()
+            except Exception as e:
+                logging.error(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
+                print(f'Error placing buy order for {quantity} units of {symbol}: {str(e)}')
+                return
+
+            logging.info(f'Buy order placed for {quantity} units of {symbol}')
+            # Send a message to the team
+            send_teams_message(teams_url, {"text": f"Placed a BUY order for {quantity} units of {symbol}"})
+
+            # Record the trade
+            record_trade(symbol, 'buy', quantity, date)
         else:
-            logging.info(f"Buy order not validated for {symbol}")
+            logging.info(f"Order quantity for symbol {symbol} is not greater than 0. Can't place the order.")
     else:
-        logging.info(f"No average entry price found for {symbol}. Not placing a buy order.")
+        logging.info(f"Buy order not validated for {symbol}")
 
 
 def process_sell(api, data, row, risk_management, teams_url, manager):
