@@ -120,7 +120,6 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
             try:
                 # Place a market buy order
                 api.submit_order(**order_details)
-                print(api.submit_order(**order_details))
                 logging.info(f'Buy order placed for {quantity} units of {symbol}.')
                 manager.add_asset(symbol, quantity, avg_entry_price * quantity)
                 manager.increment_operations()
