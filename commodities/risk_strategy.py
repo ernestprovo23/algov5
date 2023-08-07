@@ -17,11 +17,6 @@ api = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url='https://paper-a
 account = api.get_account()
 equity = float(account.equity)
 
-# Maximum amount of equity that can be held in cryptocurrencies
-max_crypto_equity = equity * 0.45
-
-# Maximum amount of equity that can be held in commodities
-max_commodity_equity = equity * 0.45
 
 # read the risk_params in and use the values
 # these are updated by the algorithm below by pnl
@@ -94,8 +89,9 @@ class RiskManagement:
         self.api = api
         self.risk_params = risk_params
         self.alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
-        self.manager = PortfolioManager(api)  # Initialize PortfolioManager here
-
+        self.manager = PortfolioManager(api)
+        self.crypto_value = 0
+        self.commodity_value = 0
 
         # Get account info
         account = self.api.get_account()
@@ -204,9 +200,9 @@ class RiskManagement:
             position_value = float(position.qty) * current_price
 
             if symbol.endswith('USD'):  # Check if symbol ends with USD
-                crypto_value += position_value
+                crypto_value += float(position_value)
             else:  # Assuming other symbols are commodities
-                commodity_value += position_value
+                commodity_value += float(position_value)
 
         print(f'Total crypto value: {crypto_value}. And total commodity value: {commodity_value}.')
 
@@ -306,10 +302,8 @@ class RiskManagement:
 
     def calculate_position_values(self):
         positions = self.api.list_positions()
-
         self.crypto_value = 0.0
         self.commodity_value = 0.0
-
         # Calculate the total value of crypto and commodity positions
         for position in positions:
             symbol = position.symbol
@@ -354,8 +348,13 @@ class RiskManagement:
 
             portfolio = self.api.list_positions()
 
-            portfolio_value = sum([float(p.current_price) * float(p.qty) for p in portfolio])
-            print(f"Current portfolio value (market value of all positions): {portfolio_value}")
+            # Calculate position values directly here.
+            crypto_value = sum([float(p.current_price) * float(p.qty) for p in portfolio if p.symbol.endswith('USD')])
+            commodity_value = sum(
+                [float(p.current_price) * float(p.qty) for p in portfolio if not p.symbol.endswith('USD')])
+
+            portfolio_value = crypto_value + commodity_value
+            print(f"Current portfolio value (market value of all positions): ${round(portfolio_value, 2)}.")
 
             print('##################################################################')
             print('##################################################################')
@@ -391,33 +390,29 @@ class RiskManagement:
                 print("Proposed trade exceeds cash available to purchase crypto.")
                 return False
 
-            # crypto specific - check if proposed new value is more than current account cash holdings - if so, reject it
             if symbol.endswith('USD'):
-                self.calculate_position_values()  # Calculate the current values of crypto and commodity positions
-                crypto_value = self.crypto_value
-                print(f'Here is the new crypto {crypto_value}')
-                if float(crypto_value) + float(proposed_trade_value) > self.max_crypto_equity():
-                    print(f'New Crypto Equity for this trade would be: {self.max_crypto_equity}')
-                    print("Proposed trade exceeds max crypto equity limit.")
+                print('processing crypto order....')
+                crypto_equity = self.get_crypto_equity()
+                max_crypto_equity = self.max_crypto_equity()
+                print(f'The total market amount for crypto portfolio is: ${crypto_value}')
+                print(f'Current crypto equity allowed: ${crypto_equity}')
+                print(f'Max crypto equity: ${max_crypto_equity}')
+
+                if float(crypto_value) + float(proposed_trade_value) > float(max_crypto_equity):
+                    print("Trade exceeds max crypto equity limit of 45% of account equity.")
                     return False
             else:
+                # if symbol is not a crypto symbol
 
-                commodity_equity = self.get_commodity_equity()
-                updated_max_crypto_equity = self.update_max_crypto_equity()
-                print(f'Here is the commodity equity after purchase: {commodity_equity}')
-                print(f'Here is the maximum commodity equity after purchase: {updated_max_crypto_equity}')
-                print(f'Here is the proposed trade value after analysis: {proposed_trade_value}')
+                max_commodity_equity = self.get_commodity_equity()
+                commodity_equity = self.max_commodity_equity()
 
-                if float(commodity_equity) + float(proposed_trade_value) > updated_max_crypto_equity:
-                    print("Proposed trade exceeds max commodity equity limit.")
-                    return False
+                print(f'Here is the commodity equity after purchase: ${max_commodity_equity}')
+                print(f'Here is the $ commodity equity during purchase: ${commodity_equity}')
+                print(f'Here is the proposed trade value: ${proposed_trade_value}')
 
-                print(self.crypto_symbols)
-
-                crypto_equity = self.get_crypto_equity()
-
-                if float(crypto_equity) + float(proposed_trade_value) > self.risk_params['max_crypto_equity']:
-                    print("Proposed trade exceeds max crypto equity")
+                if (float(commodity_equity) + float(proposed_trade_value)) > max_commodity_equity:
+                    print("Trade exceeds max commodity equity limit.")
                     return False
 
             if order_type == 'buy':
@@ -530,7 +525,7 @@ class RiskManagement:
             total_equity = pnl_total + cash_not_invested
 
             print(
-                f"Total Profit/Loss: {pnl_total}. Total equity (cash invested plus cash not invested): {total_equity}")
+                f"Total Profit/Loss: ${round(pnl_total,2)}. Total equity (cash invested plus cash not invested): ${round(total_equity,2)}")
             return pnl_total
 
         except Exception as e:
@@ -556,13 +551,21 @@ class RiskManagement:
         print(f'pnl is accurately: {pnl_total}')
 
         if pnl_total <= 0:
-            print("PnL is negative, reducing risk parameters...")
-            self.risk_params['max_position_size'] *= 0.90  # reduce by 10%
-            self.risk_params['max_portfolio_size'] *= 0.90  # reduce by 10%
+            print("PnL is negative...")
+            if self.risk_params['max_position_size'] >= 50:
+                print("Reducing risk parameters...")
+                self.risk_params['max_position_size'] *= 0.90  # reduce by 10%
+                self.risk_params['max_portfolio_size'] *= 0.90  # reduce by 10%
+            else:
+                print("Max position size is less than 50. Not reducing risk parameters.")
         elif pnl_total > 0:
-            print("PnL is positive, increasing risk parameters...")
-            self.risk_params['max_position_size'] *= 1.0015  # increase by .15%
-            self.risk_params['max_portfolio_size'] *= 1.0015  # increase by .15%
+            print("PnL is positive...")
+            if self.risk_params['max_position_size'] >= 50:
+                print("Increasing risk parameters...")
+                self.risk_params['max_position_size'] *= 1.0015  # increase by .15%
+                self.risk_params['max_portfolio_size'] *= 1.0015  # increase by .15%
+            else:
+                print("Max position size is less than 50. Not increasing risk parameters.")
         else:
             print("PnL is neutral, no changes to risk parameters.")
 
@@ -1022,11 +1025,6 @@ if __name__ == "__main__":
     print(f"Total Allowed Commodity Equity: {commodity_equity}")
     print(f"Total Allowed Crypto Equity: {crypto_equity}")
 
-    # Call the new method to update max_crypto_equity
-    updated_max_crypto_equity = risk_manager.update_max_crypto_equity()
-    print(f"Updated max_crypto_equity value is: {updated_max_crypto_equity}")
-
-
     portfolio_summary = {}
     portfolio_summary['equity'] = float(account.equity)
     portfolio_summary['cash'] = float(account.cash)
@@ -1088,10 +1086,10 @@ if __name__ == "__main__":
         "@type": "MessageCard",
         "@context": "http://schema.org/extensions",
         "themeColor": "0076D7",
-        "summary": "Trade Orders Summary",
+        "summary": "Account Summary",
         "sections": [{
-            "activityTitle": "Trade Orders Placed",
-            "activitySubtitle": "Summary of Buy and Sell Orders",
+            "activityTitle": "Account Summary Report",
+            "activitySubtitle": "",
             "facts": []
         }]
     }
@@ -1101,7 +1099,7 @@ if __name__ == "__main__":
     for position in portfolio_summary['positions']:
         facts.append({
             'name': position['symbol'],
-            'value': f"Average Entry Price: {position['avg_entry_price']}, Current Price: {position['current_price']}, Profitability: {position['profitability']}%, Quantity: {position['quantity']}"
+            'value': f"Average Entry Price: ${position['avg_entry_price']}, Current Price: ${position['current_price']}, Profitability: ${position['profitability']}%, Quantity: {position['quantity']}"
         })
 
     facts.append({'name': 'Equity', 'value': round(portfolio_summary['equity'], 2)})

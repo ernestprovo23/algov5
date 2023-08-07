@@ -1,7 +1,1 @@
-{
-    "max_position_size": 612.7604389527589,
-    "max_portfolio_size": 22398.13535232278,
-    "max_drawdown": 45.5,
-    "max_risk_per_trade": 0.02183,
-    "max_crypto_equity": 11951.72758465203
-}
+{"max_position_size": 213.6563540090393, "max_portfolio_size": 22398.803817620068, "max_drawdown": 45.5, "max_risk_per_trade": 0.02183, "max_crypto_equity": 7967.302467104149}
