@@ -1050,7 +1050,11 @@ if __name__ == "__main__":
             print(f"Warning: Average Entry Price for {symbol} is zero. Skipping this symbol.")
             continue
 
-        current_price = round(current_price, 2)
+        if closing_price is not None:
+            current_price = float(closing_price)
+        else:
+            current_price = 0
+
         profitability = (current_price - float(position.avg_entry_price)) / float(position.avg_entry_price) * 100
 
         print(
