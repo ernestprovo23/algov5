@@ -17,6 +17,7 @@ import time
 import math
 
 
+
 def send_teams_message(teams_url, message):
     data = {'text': message}
     headers = {'Content-Type': 'application/json'}
@@ -129,25 +130,47 @@ def place_order(api, symbol, shares, recent_close):
             client_order_id=client_order_id
         )
 
-        # Place take-profit order
-        take_profit_order = api.submit_order(
-            symbol=symbol,
-            qty=shares,
-            side='sell',
-            type='limit',
-            limit_price=take_profit_price,
-            time_in_force='day'
-        )
+        # Calculate whole and fractional shares for sell orders
+        whole_shares = math.floor(shares)
+        fractional_shares = shares - whole_shares
 
-        # Place stop-loss order
-        stop_loss_order = api.submit_order(
-            symbol=symbol,
-            qty=shares,
-            side='sell',
-            type='stop',
-            stop_price=stop_loss_price,
-            time_in_force='day'
-        )
+        # Place take-profit and stop-loss orders for whole shares
+        if whole_shares > 0:
+            take_profit_order = api.submit_order(
+                symbol=symbol,
+                qty=whole_shares,
+                side='sell',
+                type='limit',
+                limit_price=take_profit_price,
+                time_in_force='day'
+            )
+
+            stop_loss_order = api.submit_order(
+                symbol=symbol,
+                qty=whole_shares,
+                side='sell',
+                type='stop',
+                stop_price=stop_loss_price,
+                time_in_force='day'
+            )
+
+        # Place market sell orders for fractional shares
+        if fractional_shares > 0:
+            take_profit_order_fractional = api.submit_order(
+                symbol=symbol,
+                qty=fractional_shares,
+                side='sell',
+                type='market',
+                time_in_force='day'
+            )
+
+            stop_loss_order_fractional = api.submit_order(
+                symbol=symbol,
+                qty=fractional_shares,
+                side='sell',
+                type='market',
+                time_in_force='day'
+            )
 
         print(f"{symbol}: order placed successfully!")
 
@@ -230,31 +253,27 @@ def handle_symbol(symbol):
             print(f"{symbol}: SMA condition not met. Current: {recent_close} / {recent_sma}. ")
 
 
-        if recent_rsi <= 70 and recent_macd >= recent_signal and recent_close >= recent_sma:
-            # Calculate shares once here
-            shares = int(risk_params['max_portfolio_size'] * risk_params['max_risk_per_trade']) / recent_close / 3
+        if recent_rsi <= 70 and recent_macd >= recent_signal and recent_close <= recent_sma:
+            # Calculate shares
+            shares = rm.calculate_quantity(symbol)
 
             # Print shares type
-            print(f"Shares type for {symbol}: {type(shares)}")
+            print(f"Shares type for {symbol}: {shares}")
 
-            # Check if we already have a position or an open order for this symbol
-            print(current_holdings)
-            print(open_orders_symbols)
-            if symbol in current_holdings or symbol in open_orders_symbols:
-                print(f"Already hold a position or have an open order in {symbol}, skipping order...")
+            # Calculate shares
+            shares = rm.calculate_quantity(symbol)
+
+            # Validate trade instead of manually calc the qty
+            is_valid = rm.validate_trade(symbol, shares, "buy")
+            if is_valid:
+                print(f"Trade validated for {symbol} with {shares} shares")
             else:
-                shares = int(risk_params['max_portfolio_size'] * risk_params['max_risk_per_trade']) / recent_close / 3
+                print(f"Trade invalid for {symbol} with {shares} shares")
+                return
 
-                # Check if shares exceed maximum position size
-                if shares > risk_params['max_position_size']:
-                    print(
-                        f"Requested {shares} exceeds maximum position size, adjusting to {risk_params['max_position_size']}")
-                    shares = risk_params['max_position_size']
-                    print(f"Shares type: {type(shares)}")
+            # Place order
+            place_order(api, symbol, shares, recent_close)
 
-                print(f"{symbol}: All conditions met. Place order for: {shares} shares.")
-
-                place_order(api, symbol, shares, recent_close)
         else:
             print(f"{symbol}: Not all conditions met. No order placed.")
             symbols_not_purchased.append(symbol)

@@ -5,11 +5,9 @@ import json
 from trade_stats import download_trades
 from alpha_vantage.timeseries import TimeSeries
 from alpha_vantage.cryptocurrencies import CryptoCurrencies
-import time
 from datetime import datetime
-import os
 from port_op import optimize_portfolio
-import logging
+import numpy as np
 
 alpha_vantage_ts = TimeSeries(key=ALPHA_VANTAGE_API, output_format='pandas')
 alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
@@ -118,24 +116,28 @@ class RiskManagement:
         with open('risk_params.json', 'w') as f:
             json.dump(self.risk_params, f, indent=4)
 
-        print(f"Updated max_crypto_equity: {max_crypto_equity}")
         return max_crypto_equity
 
     def get_commodity_equity(self):
         equity = float(self.api.get_account().equity)
-        max_commodity_equity = equity * 0.50  # Adjust the percentage as per your strategy
+        max_commodity_equity = equity * 0.45  # Adjust the percentage as per your strategy
         return max_commodity_equity
 
 
     def get_crypto_equity(self):
         equity = float(self.api.get_account().equity)
-        max_crypto_equity = equity * 0.50  # Adjust the percentage as per your strategy
+        max_crypto_equity = equity * 0.45  # Adjust the percentage as per your strategy
         return max_crypto_equity
 
 
     def max_commodity_equity(self):
         equity = float(self.api.get_account().equity)
-        max_equity = equity * 0.50  # or whatever percentage
+        max_equity = equity * 0.45  # or whatever percentage
+        return max_equity
+
+    def max_crypto_equity(self):
+        equity = float(self.api.get_account().equity)
+        max_equity = equity * 0.45  # or whatever percentage
         return max_equity
 
     def optimize_portfolio(self):
@@ -159,13 +161,41 @@ class RiskManagement:
 
         return quantities_to_purchase
 
+    def get_daily_returns(self, symbol: str, days: int = 3) -> float:
+        url = "https://paper-api.alpaca.markets/v2/positions"
+        headers = {
+            "accept": "application/json",
+            "APCA-API-KEY-ID": ALPACA_API_KEY,
+            "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
+        }
+        response = requests.get(url, headers=headers)
+        data = response.json()
+
+        # Find the position for the given symbol
+        position_data = None
+        for position in data:
+            if position['symbol'] == symbol:
+                position_data = position
+                break
+
+        if position_data is None:
+            raise ValueError(f"No position found for symbol {symbol}")
+
+        # Get the closing prices for the past `days` days
+        closing_prices = [float(position_data['lastday_price']) for _ in range(days)]
+
+        # Calculate the daily returns
+        returns = [np.log(closing_prices[i] / closing_prices[i - 1]) for i in range(1, len(closing_prices))]
+
+        # Return the daily returns
+        return returns
+
     def rebalance_positions(self):
         account = self.api.get_account()
         equity = float(account.equity)
         positions = self.api.list_positions()
-
-        crypto_value = 0
-        commodity_value = 0
+        crypto_value = self.crypto_value
+        commodity_value = self.commodity_value
 
         # Calculating the overall portfolio value and separate values for crypto and commodities
         for position in positions:
@@ -173,10 +203,22 @@ class RiskManagement:
             current_price = float(position.current_price)
             position_value = float(position.qty) * current_price
 
-            if symbol in self.crypto_symbols:
+            if symbol.endswith('USD'):  # Check if symbol ends with USD
                 crypto_value += position_value
             else:  # Assuming other symbols are commodities
                 commodity_value += position_value
+
+        print(f'Total crypto value: {crypto_value}. And total commodity value: {commodity_value}.')
+
+        # Get volatility of each position
+        volatility = {}
+        for position in positions:
+            # Replace with your method of obtaining daily returns
+            daily_returns = self.get_daily_returns(position.symbol)
+            volatility[position.symbol] = np.std(daily_returns)
+
+        # Sort positions by descending volatility
+        sorted_positions = sorted(volatility.items(), key=lambda x: x[1], reverse=True)
 
         # Check if crypto or commodity positions exceed 50% of total equity
         if crypto_value > 0.5 * equity or commodity_value > 0.5 * equity:
@@ -191,8 +233,8 @@ class RiskManagement:
                                activity.activity_type == 'FILL' and activity.transaction_time.to_pydatetime().date() == current_date]
 
             # Loop through positions and analyze each one to rebalance
-            for position in positions:
-                symbol = position.symbol
+            for symbol, _ in sorted_positions:
+                position = self.api.get_position(symbol)
                 qty = float(position.qty)
                 current_price = float(position.current_price)
 
@@ -208,20 +250,34 @@ class RiskManagement:
                             continue
 
                     shares_to_sell = int(qty * 0.35)  # Example: selling 35% of holdings
-                    price_at_which_to_sell = current_price * 0.99  # Setting a limit price 1% below current price
+
+                    actual_qty = float(self.api.get_position(symbol).qty)
+
+                    if shares_to_sell > actual_qty:
+                        print("Error - adjusted shares to sell down to available qty")
+                        shares_to_sell = actual_qty
+
+                    price_floor = 0.001
+                    price_at_which_to_sell = max(price_floor, current_price * 0.99)
                     price_at_which_to_sell = round(price_at_which_to_sell, 2)
 
-                    print(f"Trying to sell {shares_to_sell} shares of {symbol}.")
+                    print(f"Trying to sell {shares_to_sell} shares of {symbol} at {price_at_which_to_sell}.")
 
-                    if shares_to_sell > 0:
-                        self.api.submit_order(
-                            symbol=symbol,
-                            qty=shares_to_sell,
-                            side='sell',
-                            type='limit',
-                            limit_price=price_at_which_to_sell,
-                            time_in_force='gtc'
-                        )
+                    # manually handle SHIBUSB because of its super low pricing model
+                    if symbol == 'SHIBUSD':
+                        self.api.submit_order(symbol=symbol, qty=shares_to_sell, side='sell', type='market',
+                                              time_in_force='gtc')
+                    else:
+                        # normal market order meeting risk params
+                        if shares_to_sell > 0:
+                            self.api.submit_order(
+                                symbol=symbol,
+                                qty=shares_to_sell,
+                                side='sell',
+                                type='limit',
+                                limit_price=price_at_which_to_sell,
+                                time_in_force='gtc'
+                            )
 
     def get_position(self, symbol):
         """
@@ -246,10 +302,53 @@ class RiskManagement:
 
         return pos
 
+    total_trades_today = 0
+
+    def calculate_position_values(self):
+        positions = self.api.list_positions()
+
+        self.crypto_value = 0.0
+        self.commodity_value = 0.0
+
+        # Calculate the total value of crypto and commodity positions
+        for position in positions:
+            symbol = position.symbol
+            current_price = float(position.current_price)
+            position_value = float(position.qty) * current_price
+
+            if symbol.endswith('USD'):  # If the symbol ends with 'USD', it's a crypto position
+                self.crypto_value += position_value
+            else:  # Otherwise, it's a commodity position
+                self.commodity_value += position_value
+
     def validate_trade(self, symbol, qty, order_type):
 
+        if self.total_trades_today >= 120:
+            print("Hit daily trade limit, rejecting order")
+            return False
+
         try:
-            qty = float(qty)
+            #quantity check to see if we buy delta of suggested shares or do not buy before proceeding
+            try:
+                # Check if there's already a position for this symbol
+                existing_position = self.api.get_position(symbol)
+                current_qty = float(existing_position.qty)
+            except Exception:
+                # No position exists for this symbol
+                current_qty = 0.0
+
+            new_qty = float(current_qty) + float(qty)
+
+            # Check if the new total quantity is within the limits
+            if new_qty > self.risk_params['max_position_size']:
+                print("Buy exceeds max position size")
+                return False
+            elif new_qty <= current_qty:
+                print("No increase in position size, rejecting order")
+                return False
+            else:
+                # Adjust the quantity to buy to be the difference between the new and current quantity
+                qty = float(new_qty) - float(current_qty)
 
             print(f"Running validation logic against trade for {symbol}...")
 
@@ -267,11 +366,11 @@ class RiskManagement:
             # get the current price from the get_current_price method
             current_price = self.get_current_price(symbol)
 
-            print(f"Current Alpaca API price for {symbol} is: {current_price}")
+            print(f"Current Alpaca API price for {symbol} is: ${current_price}")
 
             # get the proposed trade value from the new trade being run using current price * qty
-            proposed_trade_value = current_price * qty
-            print(f"Total proposed shares to purchase: {proposed_trade_value}")
+            proposed_trade_value = float(current_price) * float(qty)
+            print(f"Total $ to purchase new order: ${round(proposed_trade_value, 2)}")
 
             # get the list of open orders
             open_orders = self.api.list_orders(status='open')
@@ -293,21 +392,23 @@ class RiskManagement:
                 return False
 
             # crypto specific - check if proposed new value is more than current account cash holdings - if so, reject it
-            if symbol in self.crypto_symbols:
-                crypto_equity = self.get_crypto_equity()
-                print(crypto_equity)
-                if float(crypto_equity + proposed_trade_value) > self.max_crypto_equity:
-                    print(f'New Crypto Equity for this trade would be: {max_crypto_equity}')
+            if symbol.endswith('USD'):
+                self.calculate_position_values()  # Calculate the current values of crypto and commodity positions
+                crypto_value = self.crypto_value
+                print(f'Here is the new crypto {crypto_value}')
+                if float(crypto_value) + float(proposed_trade_value) > self.max_crypto_equity():
+                    print(f'New Crypto Equity for this trade would be: {self.max_crypto_equity}')
                     print("Proposed trade exceeds max crypto equity limit.")
                     return False
             else:
+
                 commodity_equity = self.get_commodity_equity()
                 updated_max_crypto_equity = self.update_max_crypto_equity()
                 print(f'Here is the commodity equity after purchase: {commodity_equity}')
                 print(f'Here is the maximum commodity equity after purchase: {updated_max_crypto_equity}')
-                print(f'Here is the proposed traade value after analysis: {proposed_trade_value}')
+                print(f'Here is the proposed trade value after analysis: {proposed_trade_value}')
 
-                if (commodity_equity + proposed_trade_value) > updated_max_crypto_equity:
+                if float(commodity_equity) + float(proposed_trade_value) > updated_max_crypto_equity:
                     print("Proposed trade exceeds max commodity equity limit.")
                     return False
 
@@ -315,7 +416,7 @@ class RiskManagement:
 
                 crypto_equity = self.get_crypto_equity()
 
-                if (crypto_equity + proposed_trade_value) > self.risk_params['max_crypto_equity']:
+                if float(crypto_equity) + float(proposed_trade_value) > self.risk_params['max_crypto_equity']:
                     print("Proposed trade exceeds max crypto equity")
                     return False
 
@@ -330,14 +431,17 @@ class RiskManagement:
 
                 position = self.get_position(symbol)
 
-                position_qty = float(position['qty'])  # Convert to float
+                position_qty = float(position['qty'])
 
-                if qty > position_qty:  # Now the comparison should work
+                qty = float(qty)
+
+                if qty > position_qty:
 
                     print("Sell quantity exceeds position size")
 
                     return False
 
+            self.total_trades_today += 1
             return True
 
         except Exception as e:
@@ -369,42 +473,99 @@ class RiskManagement:
             print(f"An exception occurred while monitoring positions: {str(e)}")
             return None
 
+
+    def get_crypto_fee(self, volume):
+        if volume < 100_000:
+            return 0.0025
+        elif volume < 500_000:
+            return 0.0022
+        elif volume < 1_000_000:
+            return 0.002
+        elif volume < 10_000_000:
+            return 0.0018
+        elif volume < 25_000_000:
+            return 0.0015
+        elif volume < 50_000_000:
+            return 0.0013
+        elif volume < 100_000_000:
+            return 0.0012
+        else:
+            return 0.001
+
     def report_profit_and_loss(self):
-        # Calculate and report profit and loss
+        url = "https://paper-api.alpaca.markets/v2/account"
+        url_portfolio_history = "https://paper-api.alpaca.markets/v2/account/portfolio/history"
+        headers = {
+            "accept": "application/json",
+            "APCA-API-KEY-ID": ALPACA_API_KEY,
+            "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
+        }
+
         try:
-            account = self.api.get_account()
-            portfolio = self.api.list_positions()
-            cost_basis = sum([float(position.avg_entry_price) * float(position.qty) for position in portfolio])
-            pnl = float(account.equity) - cost_basis
-            print(f"Profit/Loss: {pnl}")
-            return pnl
+            # Get account data
+            account_response = requests.get(url, headers=headers)
+            account_data = account_response.json()
+            cash_not_invested = float(account_data['cash'])
+
+            # Get portfolio history data
+            portfolio_history_response = requests.get(url_portfolio_history, headers=headers)
+            portfolio_history_data = portfolio_history_response.json()
+
+            # Filter out 'None' values
+            equity_values = [v for v in portfolio_history_data['equity'] if v is not None]
+
+            # Calculate PnL based on portfolio history
+            first_equity = float(equity_values[0])  # First equity value
+            last_equity = float(equity_values[-1])  # Last equity value
+            commissions = first_equity * 0.01
+
+            print(f'First equity is: {first_equity}.')
+            print(f'Last equity is: {last_equity}.')
+            print(f'Total commisions were: {commissions}.')
+
+            # find pnl for account
+            pnl_total = last_equity - first_equity - commissions
+
+            # find total equity for reporting
+            total_equity = pnl_total + cash_not_invested
+
+            print(
+                f"Total Profit/Loss: {pnl_total}. Total equity (cash invested plus cash not invested): {total_equity}")
+            return pnl_total
+
         except Exception as e:
             print(f"An exception occurred while reporting profit and loss: {str(e)}")
-            return None
+            return 0
 
     def get_equity(self):
         return float(self.api.get_account().equity)
 
-    def update_risk_parameters(self, current_equity):
+    def update_risk_parameters(self):
         # Dynamically adjust risk parameters based on account performance
-        pnl = self.report_profit_and_loss()
+        pnl_total = self.report_profit_and_loss()
         account = self.api.get_account()
         current_equity = float(account.equity)
 
+        self.risk_params['max_portfolio_size'] = current_equity  # Update the max_portfolio_size with the current equity
 
-        self.risk_params[
-            'max_portfolio_size'] = current_equity  # Update the max_portfolio_size with the current equity
+        if pnl_total is None:
+            print("Could not calculate PnL, not updating risk parameters.")
+            return
 
-        if pnl <= 105:
+        pnl_total = float(round(pnl_total, 2))
+        print(f'pnl is accurately: {pnl_total}')
+
+        if pnl_total <= 0:
             print("PnL is negative, reducing risk parameters...")
-            self.risk_params['max_position_size'] *= 0.96  # reduce by 4%
-            self.risk_params['max_portfolio_size'] *= 0.96  # reduce by 4%
-        elif pnl >= 110:
+            self.risk_params['max_position_size'] *= 0.90  # reduce by 10%
+            self.risk_params['max_portfolio_size'] *= 0.90  # reduce by 10%
+        elif pnl_total > 0:
             print("PnL is positive, increasing risk parameters...")
-            self.risk_params['max_position_size'] *= 1.0032  # increase by 10%
-            self.risk_params['max_portfolio_size'] *= 1.0032  # increase by 10%
+            self.risk_params['max_position_size'] *= 1.0015  # increase by .15%
+            self.risk_params['max_portfolio_size'] *= 1.0015  # increase by .15%
         else:
             print("PnL is neutral, no changes to risk parameters.")
+
         with open('risk_params.json', 'w') as f:
             json.dump(self.risk_params, f)
         print("Risk parameters updated.")
@@ -475,7 +636,6 @@ class RiskManagement:
 
             return True
 
-
     def check_momentum(self, symbol, momentum_signal):
         """
         Checks the momentum signal and decides whether to sell the entire position.
@@ -543,7 +703,6 @@ class RiskManagement:
                 print(momentum.index)
                 return None  # or some appropriate fallback value
 
-
     def calculate_quantity(self, symbol):
         """
         Calculates the quantity to purchase based on available equity and current price.
@@ -551,11 +710,26 @@ class RiskManagement:
         # Get account info
         account = self.api.get_account()
         available_cash = float(account.cash)
-        equity = float(account.equity)
 
-        # Determine how much of the equity can be invested
-        max_crypto_equity = equity * 0.45  # You should define this within the method
-        investable_amount = min(available_cash, max_crypto_equity)
+        # Read max_crypto_equity from JSON file
+        with open('risk_params.json') as f:
+            risk_params = json.load(f)
+        max_crypto_equity = float(risk_params['max_crypto_equity'])
+
+        # Calculate the current total investment in cryptocurrencies
+        total_investment = self.report_profit_and_loss() - available_cash
+
+        # If total investment is already at or exceeds max_crypto_equity, return quantity 0
+        if total_investment >= max_crypto_equity:
+            print(
+                f"Total investment in cryptocurrencies is already at or exceeds the maximum permitted. Returning quantity 0.")
+            return 0
+
+        # Calculate allowable investment as max_crypto_equity minus total investment
+        allowable_investment = max_crypto_equity - total_investment
+
+        # Determine investable amount
+        investable_amount = min(available_cash, allowable_investment)
 
         # Check if investable amount is less than 1
         if investable_amount < 1:
@@ -572,26 +746,25 @@ class RiskManagement:
         preliminary_quantity = investable_amount / current_price
 
         # Tiered system for quantity adjustment
-        if current_price > 4001:  # High priced assets like BTC
-            quantity = preliminary_quantity * 0.01  # buy less of high priced assets
+        if current_price > 4001:  # High-priced assets like BTC
+            quantity = preliminary_quantity * 0.01  # buy less of high-priced assets
         elif 3001 < current_price <= 4000:  # Mid-priced assets
-            quantity = preliminary_quantity * 0.0234
+            quantity = preliminary_quantity * 0.0354
         elif 1000 < current_price <= 3000:  # Mid-priced assets
             quantity = preliminary_quantity * 0.0334
-        elif 100 < current_price <= 999:  # Mid-priced assets
+        elif 201 < current_price <= 999:  # Mid-priced assets
             quantity = preliminary_quantity * 0.04534
-        elif 1 < current_price <= 99:  # Mid-priced assets
-            quantity = preliminary_quantity * 0.07434
-        elif 0.10 < current_price <= .99:  # Mid-priced assets
-            quantity = preliminary_quantity * 0.011434
-        else:  # Low-priced assets
+        elif 20 < current_price <= 200:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.09434
+        elif -0.000714 < current_price <= 20.00:  # Mid-priced assets
+            quantity = preliminary_quantity * 0.031434
+        else: # ordinary priced assets
             quantity = preliminary_quantity  # buy more of low priced assets
 
         quantity = round(quantity, 5)
 
         print(f"Calculated quantity for {symbol}: {quantity}")
         return quantity
-
 
     def execute_profit_taking(self, symbol, pct_gain=0.05):
         """
@@ -619,7 +792,6 @@ class RiskManagement:
                     time_in_force='gtc'
                 )
                 print(f"Selling {qty} shares of {symbol} to realize profit.")
-
 
     def execute_stop_loss(self, symbol, pct_loss=0.07):
         """
@@ -705,7 +877,6 @@ class RiskManagement:
         else:
             return "Hold"
 
-
     def get_exchange_rate(base_currency, quote_currency):
         # Your Alpha Vantage API key
         api_key = ALPHA_VANTAGE_API
@@ -723,7 +894,6 @@ class RiskManagement:
         exchange_rate = data["Realtime Currency Exchange Rate"]["5. Exchange Rate"]
 
         return float(exchange_rate)
-
 
     def get_purchase_price(self, symbol):
         """
@@ -753,11 +923,11 @@ class RiskManagement:
             print(f"No position in {symbol} to calculate average entry price. Error: {str(e)}")
             return 0
 
-
-    def get_current_price(self, symbol, ALPHA_VANTAGE_API=None):
-        print(f'Current Price Lookup for : {symbol}')
+    def get_current_price(self, symbol):
+        print(f'Running current price function lookup: {symbol}')
 
         try:
+            print('Trying Alpha Vantage API')
             # Attempt to fetch price from Alpha Vantage
             url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={ALPHA_VANTAGE_API}"
             response = requests.get(url)
@@ -771,6 +941,7 @@ class RiskManagement:
                 f"Current price for {symbol} is {current_price} (string value: {current_price_str}) at {last_update}.")
             return current_price
         except Exception as e:
+            print(f'Cannot find {symbol} in Alpha Vantage: {e}')
             pass
 
         # If Alpha Vantage fails, attempt to fetch price from Alpaca
@@ -795,8 +966,7 @@ class RiskManagement:
                 return current_price
             except Exception as e:
                 print(f"Failed to get current price from Alpaca or Alpha Vantage for {symbol}. Error: {str(e)}")
-                return None
-
+                return 0
 
 def get_alpha_vantage_data(base_currency, quote_currency):
     url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency={base_currency}&to_currency={quote_currency}&apikey={ALPHA_VANTAGE_API}"
@@ -838,7 +1008,7 @@ if __name__ == "__main__":
     risk_manager.report_profit_and_loss()
     account = risk_manager.api.get_account()
     current_equity = float(account.equity)
-    risk_manager.update_risk_parameters(current_equity=current_equity)
+    risk_manager.update_risk_parameters()
 
     risk_manager.rebalance_positions()
 
@@ -849,8 +1019,8 @@ if __name__ == "__main__":
     crypto_equity = risk_manager.get_crypto_equity()
     max_commodity_equity = risk_manager.max_commodity_equity()
 
-    print(f"Commodity Equity: {commodity_equity}")
-    print(f"Crypto Equity: {crypto_equity}")
+    print(f"Total Allowed Commodity Equity: {commodity_equity}")
+    print(f"Total Allowed Crypto Equity: {crypto_equity}")
 
     # Call the new method to update max_crypto_equity
     updated_max_crypto_equity = risk_manager.update_max_crypto_equity()
@@ -943,4 +1113,3 @@ if __name__ == "__main__":
     teams_url = 'https://data874.webhook.office.com/webhookb2/9cb96ee7-c2ce-44bc-b4fe-fe2f6f308909@4f84582a-9476-452e-a8e6-0b57779f244f/IncomingWebhook/7e8bd751e7b4457aba27a1fddc7e8d9f/6d2e1385-bdb7-4890-8bc5-f148052c9ef5'
 
     send_teams_message(teams_url, message)
-
