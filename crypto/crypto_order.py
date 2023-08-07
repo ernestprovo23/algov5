@@ -117,9 +117,6 @@ def process_buy(api, data, row, risk_management, teams_url, manager):
                 'time_in_force': 'gtc'
             }
 
-            # Print and inspect the order details
-            print(f"Order details before submitting: {order_details}")
-
             try:
                 # Place a market buy order
                 api.submit_order(**order_details)
@@ -162,11 +159,15 @@ def process_sell(api, data, row, risk_management, teams_url, manager):
         # Get current position
         position = api.list_positions(symbol)
 
+
         # Get the quantity currently held for selling
         if isinstance(position.qty, str):
             quantity = float(position.qty)
         else:
             quantity = position.qty
+
+        # Convert quantity to float
+        quantity = float(position.qty)
 
         if quantity > 0:
             # Calculate the trend by comparing the current price with a moving average
