@@ -405,13 +405,12 @@ class RiskManagement:
                 # if symbol is not a crypto symbol
 
                 max_commodity_equity = self.get_commodity_equity()
-                commodity_equity = self.max_commodity_equity()
 
                 print(f'Here is the commodity equity after purchase: ${max_commodity_equity}')
-                print(f'Here is the $ commodity equity during purchase: ${commodity_equity}')
-                print(f'Here is the proposed trade value: ${proposed_trade_value}')
+                print(f'Current portfolio commodity value: ${commodity_value}')
+                print(f'Proposed trade value: ${proposed_trade_value}')
 
-                if (float(commodity_equity) + float(proposed_trade_value)) > max_commodity_equity:
+                if (float(commodity_value) + float(proposed_trade_value)) > max_commodity_equity:
                     print("Trade exceeds max commodity equity limit.")
                     return False
 
