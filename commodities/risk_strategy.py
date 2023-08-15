@@ -8,6 +8,7 @@ from alpha_vantage.cryptocurrencies import CryptoCurrencies
 from datetime import datetime
 from port_op import optimize_portfolio
 import numpy as np
+import time
 
 alpha_vantage_ts = TimeSeries(key=ALPHA_VANTAGE_API, output_format='pandas')
 alpha_vantage_crypto = CryptoCurrencies(key=ALPHA_VANTAGE_API, output_format='pandas')
@@ -199,9 +200,9 @@ class RiskManagement:
             current_price = float(position.current_price)
             position_value = float(position.qty) * current_price
 
-            if symbol.endswith('USD'):  # Check if symbol ends with USD
+            if symbol.endswith('USD'):
                 crypto_value += float(position_value)
-            else:  # Assuming other symbols are commodities
+            else:
                 commodity_value += float(position_value)
 
         print(f'Total crypto value: {crypto_value}. And total commodity value: {commodity_value}.')
@@ -209,71 +210,79 @@ class RiskManagement:
         # Get volatility of each position
         volatility = {}
         for position in positions:
-            # Replace with your method of obtaining daily returns
             daily_returns = self.get_daily_returns(position.symbol)
             volatility[position.symbol] = np.std(daily_returns)
 
         # Sort positions by descending volatility
         sorted_positions = sorted(volatility.items(), key=lambda x: x[1], reverse=True)
 
-        # Check if crypto or commodity positions exceed 50% of total equity
         if crypto_value > 0.5 * equity or commodity_value > 0.5 * equity:
             print("Rebalancing positions as crypto or commodity exceeds 50% of equity.")
 
-            # Get today's date
             current_date = datetime.now().date()
 
-            # Get all activities of type 'FILL' that occurred today
             activities = self.api.get_activities()
             fill_activities = [activity for activity in activities if
                                activity.activity_type == 'FILL' and activity.transaction_time.to_pydatetime().date() == current_date]
 
-            # Loop through positions and analyze each one to rebalance
             for symbol, _ in sorted_positions:
                 position = self.api.get_position(symbol)
                 qty = float(position.qty)
                 current_price = float(position.current_price)
 
-                # Check if this position's symbol is a crypto or commodity and act accordingly
+
                 if (symbol in self.crypto_symbols and crypto_value > 0.5 * equity) or (
                         symbol not in self.crypto_symbols and commodity_value > 0.5 * equity):
 
-                    # Check if account equity is less than 25k
                     if equity < 25000:
-                        # Check if this symbol was bought today
                         if any(activity.symbol == symbol and activity.side == 'buy' for activity in fill_activities):
                             print(f"Cannot sell {symbol} as it was bought today and equity is less than 25k.")
                             continue
 
-                    shares_to_sell = int(qty * 0.35)  # Example: selling 35% of holdings
+                    actual_qty = float(position.qty)
+                    print(f'Actual shares: {actual_qty} for {symbol}.')
 
-                    actual_qty = float(self.api.get_position(symbol).qty)
+                    shares_to_sell = min(actual_qty, int(qty * 0.07))
 
-                    if shares_to_sell > actual_qty:
-                        print("Error - adjusted shares to sell down to available qty")
+                    delta = 0.0001
+                    if abs(shares_to_sell - actual_qty) < delta:
                         shares_to_sell = actual_qty
 
                     price_floor = 0.001
-                    price_at_which_to_sell = max(price_floor, current_price * 0.99)
+                    price_at_which_to_sell = max(price_floor, current_price * 0.9999)
                     price_at_which_to_sell = round(price_at_which_to_sell, 2)
 
                     print(f"Trying to sell {shares_to_sell} shares of {symbol} at {price_at_which_to_sell}.")
 
-                    # manually handle SHIBUSB because of its super low pricing model
-                    if symbol == 'SHIBUSD':
-                        self.api.submit_order(symbol=symbol, qty=shares_to_sell, side='sell', type='market',
-                                              time_in_force='gtc')
-                    else:
-                        # normal market order meeting risk params
-                        if shares_to_sell > 0:
-                            self.api.submit_order(
-                                symbol=symbol,
-                                qty=shares_to_sell,
-                                side='sell',
-                                type='limit',
-                                limit_price=price_at_which_to_sell,
-                                time_in_force='gtc'
-                            )
+                    # Fetch open orders for the current symbol
+                    open_orders = self.api.list_orders(status='open', symbols=symbol, side='sell')
+
+                    # Check for any open sell order for the exact same quantity
+                    if any(order.qty == str(shares_to_sell) for order in open_orders):
+                        print(
+                            f"Open sell order already exists for {shares_to_sell} shares of {symbol}. Skipping new order.")
+                        continue
+
+                    try:
+                        if symbol == 'SHIBUSD':
+                            self.api.submit_order(symbol=symbol, qty=shares_to_sell, side='sell', type='market',
+                                                  time_in_force='gtc')
+                        else:
+                            if shares_to_sell > 0:
+                                self.api.submit_order(
+                                    symbol=symbol,
+                                    qty=shares_to_sell,
+                                    side='sell',
+                                    type='limit',
+                                    limit_price=price_at_which_to_sell,
+                                    time_in_force='gtc'
+                                )
+                    except Exception as e:
+                        print(
+                            f"Failed to sell {shares_to_sell} shares of {symbol}. Possible reason: unsettled shares. Error: {e}")
+
+                    time.sleep(1.2)
+
 
     def get_position(self, symbol):
         """
@@ -290,15 +299,24 @@ class RiskManagement:
 
         # Assuming there's only one position per symbol
         p = symbol_positions[0]
+
+        # Get actual qty and unsettled qty
+        actual_qty = float(p.qty)
+        # This is our hypothetical attribute, replace with the actual one if it exists
+        unsettled_qty = float(p.unsettled_shares) if hasattr(p, 'unsettled_shares') else 0
+
         pos = {
             "symbol": p.symbol,
-            "qty": p.qty,
+            "qty": actual_qty,
+            "unsettled_qty": unsettled_qty,  # New field added
             "avg_entry_price": p.avg_entry_price
         }
 
         return pos
 
+
     total_trades_today = 0
+
 
     def calculate_position_values(self):
         positions = self.api.list_positions()
